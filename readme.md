@@ -7,13 +7,13 @@ The guide below walks a new operator through the entire setup — from installin
 ## Quick Start Overview
 
 1. Install Docker Desktop or another Docker runtime.
-2. Clone the repository and start the bundled admin UI via Docker (no local Python needed).
+2. Clone the repository and start all services via Docker Compose (no local Python needed).
 3. Configure Personal Assistant through the web admin at <http://localhost:8128>.
 4. Create OAuth credentials for Google Workspace APIs and generate a user token for Slack.
 5. Store the tokens under `~/.graphiti_sync/` and confirm Personal Assistant can read them.
-6. Use the admin UI's manual loaders to backfill ~365 days of history for Gmail, Drive, Calendar, and Slack.
-7. Run the Gmail, Drive, Calendar, and Slack pollers once to confirm incremental sync.
-8. Let the built-in 02:00 EST backup job archive state (or trigger a manual backup from the UI) and monitor logs directly in the browser.
+6. The poller daemon runs continuously in the background on configurable intervals.
+7. Use the admin UI's manual loaders to backfill ~365 days of history for Gmail, Drive, Calendar, and Slack.
+8. Monitor poller logs with `docker compose logs -f poller` and let the built-in 02:00 EST backup job archive state.
 
 Each step is detailed below.
 
@@ -35,45 +35,54 @@ git clone https://github.com/otreva/personal-assistant.git
 cd personal-assistant
 ```
 
-### 2. Launch the Dockerised admin UI
+### 2. Launch all services with Docker Compose
 
-Personal Assistant ships with a `docker-compose.yml` file that now boots both the admin UI and a
-Neo4j 5 instance. The compose stack mounts your repository, caches Python dependencies,
-and persists Neo4j data to `./neo4j/` so you can tear the stack down without losing the
-database. No local Python environment is required.
+Personal Assistant ships with a `docker-compose.yml` file that boots three services:
 
-- **Using Docker Compose** (recommended for day-to-day operation):
+1. **Neo4j** - Graph database on ports 7687 (Bolt) and 7474 (HTTP)
+2. **Poller Daemon** - Background service that continuously polls Gmail, Drive, Calendar, and Slack
+3. **Web Admin** - Admin UI on <http://localhost:8128>
 
-  ```bash
-  docker compose up
-  ```
+Start all services:
 
-  This command starts the admin UI on <http://localhost:8128> and exposes Neo4j on
-  <bolt://localhost:7687>. Press `Ctrl+C` to stop the stack and rerun the command to
-  resume from the persisted volumes.
+```bash
+docker compose up -d
+```
 
-- **Using the helper script** (runs a one-off container for the admin UI only):
+This runs everything in the background. The compose stack persists data to volumes so you can tear the stack down without losing the database or configuration.
 
-  ```bash
-  ./scripts/docker-run.sh
-  ```
+**View logs:**
+```bash
+docker compose logs -f poller   # Watch poller daemon logs
+docker compose logs -f web      # Watch web admin logs
+docker compose logs -f neo4j    # Watch Neo4j logs
+```
 
-  The script is handy for quick checks but does not manage Neo4j or reuse cached
-  dependencies between invocations.
+**Stop services:**
+```bash
+docker compose down
+```
 
-Both approaches expose the admin UI on <http://localhost:8128>. The first compose run
-builds the Python environment; subsequent runs reuse the cached volume for faster starts.
+The first compose run builds the Docker images; subsequent runs start instantly.
 
 ### 3. Configure Personal Assistant from the web admin
 
-Visit <http://localhost:8128> after starting the container. The admin UI detects existing
+Visit <http://localhost:8128> after starting the services. The admin UI detects existing
 settings from `~/.graphiti_sync/config.json` (created on first launch) and provides a dark
-mode/light mode aware form for editing them. Populate the Neo4j connection, polling
-intervals, historical backfill defaults (365 days by default for each service), and
-summarisation settings. Configure the backup directory, retention window, and optional
-custom logs directory in the **Backups & Logging** section, then click **Save
-configuration**. The values are persisted back to `~/.graphiti_sync/config.json` with
-secure permissions.
+mode/light mode aware form for editing them. 
+
+**Key configuration settings:**
+- **Neo4j connection** - Pre-configured for the Docker network
+- **Polling intervals** - How often pollers run (configurable per service):
+  - Gmail/Drive/Calendar: Default 3600 seconds (1 hour)
+  - Slack Active: Default 30 seconds
+  - Slack Idle: Default 3600 seconds (1 hour)
+- **Backfill defaults** - How many days of history to load (365 days by default)
+- **Slack search queries** - Comma-separated queries (e.g., `in:general, from:@me, has:link`)
+- **Summarisation settings** - Text processing behavior
+- **Backup directory and retention** - Automated backup configuration
+
+Click **Save configuration** to persist changes. The poller daemon automatically reloads the configuration on its next polling cycle.
 
 > **Note:** Environment variables and `.env` files are no longer required. The admin UI
 > persists configuration to `~/.graphiti_sync/config.json` and the compose stack creates
@@ -129,9 +138,19 @@ and Slack pollers on demand. The UI displays the number of episodes processed an
 structured log entries for each run so you can confirm incremental sync without touching
 the terminal.
 
-### 10. (Optional) Log MCP / Cursor turns
+### 10. (Optional) Add MCP server to Cursor
 
-Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging them through `graphiti.mcp.logger.McpEpisodeLogger`. The logger batches turns and writes them via the same episode pipeline used by the pollers.
+Personal Assistant includes an MCP server that lets you query your knowledge graph directly from Cursor.
+
+To enable it, add the contents of `mcp-config.json` to your Cursor MCP configuration file (typically `~/.cursor/mcp.json` or accessible via Cursor Settings → MCP):
+
+```bash
+cat mcp-config.json
+```
+
+Copy the `"personal-assistant"` entry into your `mcpServers` section. The MCP server provides tools to search and query your ingested episodes across all sources.
+
+You can also log MCP/Cursor conversation turns by creating `McpTurn` objects through `graphiti.mcp.logger.McpEpisodeLogger`. The logger batches turns and writes them via the same episode pipeline used by the pollers.
 
 ### 11. Monitor health and scheduling
 
@@ -178,6 +197,31 @@ Developers can run the synthetic end-to-end test harness to confirm the ingestio
 ```bash
 pytest tests/test_acceptance_harness.py
 ```
+
+## Troubleshooting
+
+### Neo4j Authentication Errors
+
+If you encounter `Neo.ClientError.Security.Unauthorized` authentication errors, the Neo4j database may have been initialized with a different password than the one configured in Personal Assistant (default: `localgraph`).
+
+**To reset Neo4j authentication:**
+
+1. Stop the Neo4j container:
+   ```bash
+   docker compose stop neo4j
+   ```
+
+2. Delete the Neo4j auth file:
+   ```bash
+   rm neo4j/data/dbms/auth.ini
+   ```
+
+3. Restart the containers:
+   ```bash
+   docker compose up -d
+   ```
+
+Neo4j will recreate the auth file with the password from `docker-compose.yml` (`neo4j/localgraph`), which matches the default configuration in Personal Assistant.
 
 ## Additional Documentation
 

@@ -117,7 +117,7 @@ def cmd_status(_: argparse.Namespace) -> int:
             "calendar_backfill_days": config.calendar_backfill_days,
             "slack_backfill_days": config.slack_backfill_days,
             "calendar_ids": list(config.calendar_ids),
-            "slack_search_query": config.slack_search_query,
+            "slack_search_queries": list(config.slack_search_queries),
             "backup_directory": config.backup_directory,
             "backup_retention_days": config.backup_retention_days,
             "log_retention_days": config.log_retention_days,
@@ -372,28 +372,58 @@ class _NoopCalendarClient:
 
 def create_gmail_client(
     config: GraphitiConfig, state: GraphitiStateStore
-) -> Any:  # pragma: no cover - default stub
-    return _NoopGmailClient()
+) -> Any:
+    """Create a real Gmail API client using OAuth tokens."""
+    try:
+        from .clients.google import GmailClient
+        return GmailClient(state, config.google_client_id, config.google_client_secret)
+    except (ImportError, ValueError) as exc:
+        # Fall back to noop if Google client libraries aren't available or tokens missing
+        print(f"Warning: Using noop Gmail client ({exc})")
+        return _NoopGmailClient()
 
 
 def create_drive_client(
     config: GraphitiConfig, state: GraphitiStateStore
-) -> Any:  # pragma: no cover - default stub
-    return _NoopDriveClient()
+) -> Any:
+    """Create a real Drive API client using OAuth tokens."""
+    try:
+        from .clients.google import DriveClient
+        return DriveClient(state, config.google_client_id, config.google_client_secret)
+    except (ImportError, ValueError) as exc:
+        # Fall back to noop if Google client libraries aren't available or tokens missing
+        print(f"Warning: Using noop Drive client ({exc})")
+        return _NoopDriveClient()
 
 
 def create_calendar_client(
     config: GraphitiConfig, state: GraphitiStateStore
-) -> Any:  # pragma: no cover - default stub
-    return _NoopCalendarClient()
+) -> Any:
+    """Create a real Calendar API client using OAuth tokens."""
+    try:
+        from .clients.google import CalendarClient
+        return CalendarClient(state, config.google_client_id, config.google_client_secret)
+    except (ImportError, ValueError) as exc:
+        # Fall back to noop if Google client libraries aren't available or tokens missing
+        print(f"Warning: Using noop Calendar client ({exc})")
+        return _NoopCalendarClient()
 
 
 def create_slack_client(
     config: GraphitiConfig, state: GraphitiStateStore
 ) -> Any:  # pragma: no cover - default stub
+    from .clients.slack import SlackClient
     from .pollers.slack import NullSlackClient
+    from .web_admin.oauth import load_token_section
 
-    return NullSlackClient()
+    tokens = load_token_section(state, "slack")
+    slack_token = tokens.get("slack_token", "").strip()
+    slack_cookie = tokens.get("slack_cookie", "").strip()
+    
+    if not slack_token or not slack_cookie:
+        return NullSlackClient()
+    
+    return SlackClient(token=slack_token, cookie=slack_cookie)
 
 
 COMMAND_HANDLERS = {

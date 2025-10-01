@@ -1,6 +1,9 @@
 """Slack poller implementation."""
 from __future__ import annotations
 
+import json
+import os
+import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -50,7 +53,8 @@ class SlackPoller:
     _config: GraphitiConfig = field(init=False)
     _group_id: str = field(init=False)
     _processor: EpisodeProcessor = field(init=False)
-    _query: str = field(init=False)
+    _queries: tuple[str, ...] = field(init=False)
+    _cache_dir: str = field(init=False)
 
     def __post_init__(self) -> None:
         self._config = self.config or load_config()
@@ -58,45 +62,82 @@ class SlackPoller:
             raise ValueError("Episode store group_id does not match configuration group_id")
         self._group_id = self._config.group_id
         self._processor = EpisodeProcessor(self._config)
-        query = (self._config.slack_search_query or "*").strip()
-        self._query = query or "*"
+        # Support multiple queries; default to "*" if none configured
+        queries = self._config.slack_search_queries or ("*",)
+        self._queries = tuple(q.strip() for q in queries if q.strip()) or ("*",)
+        # Cache directory for persistent user/channel lookups
+        self._cache_dir = os.path.expanduser("~/.graphiti_sync/slack_cache")
+        os.makedirs(self._cache_dir, exist_ok=True)
+    
+    def _load_persistent_cache(self, cache_type: str) -> dict[str, dict[str, str]]:
+        """Load persistent cache from disk (user_cache.json or channel_cache.json)."""
+        cache_file = os.path.join(self._cache_dir, f"{cache_type}_cache.json")
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {k: v for k, v in data.items() if isinstance(v, dict)}
+        except Exception:
+            pass
+        return {}
+    
+    def _save_persistent_cache(self, cache_type: str, cache: Mapping[str, dict[str, str]]) -> None:
+        """Save persistent cache to disk."""
+        cache_file = os.path.join(self._cache_dir, f"{cache_type}_cache.json")
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(dict(cache), f, indent=2, sort_keys=True)
+        except Exception:
+            pass  # Silently fail if cache write fails
 
     def run_once(self) -> int:
         state = self.state_store.load_state()
         slack_state = state.get("slack") if isinstance(state.get("slack"), Mapping) else {}
         if not isinstance(slack_state, Mapping):
             slack_state = {}
-        search_state = (
-            slack_state.get("search") if isinstance(slack_state.get("search"), Mapping) else {}
-        )
-        stored_query = (
-            str(search_state.get("query", "")).strip() if isinstance(search_state, Mapping) else ""
-        )
-        last_seen = search_state.get("last_seen_ts") if isinstance(search_state, Mapping) else None
-        if not isinstance(last_seen, str):
-            last_seen = None
-        if stored_query != self._query:
-            last_seen = None
 
-        user_cache = self._load_user_cache(slack_state.get("users"))
-        channel_cache = self._load_channel_cache(slack_state.get("channels"))
+        # Load from persistent disk cache first, then merge with state cache
+        user_cache = self._load_persistent_cache("user")
+        user_cache.update(self._load_user_cache(slack_state.get("users")))
+        channel_cache = self._load_persistent_cache("channel")
+        channel_cache.update(self._load_channel_cache(slack_state.get("channels")))
 
-        processed, newest_ts = self._process_search_results(
-            oldest=last_seen,
-            cutoff=None,
-            user_cache=user_cache,
-            channel_cache=channel_cache,
-            skip_until=last_seen,
-        )
+        total_processed = 0
+        query_states: dict[str, dict[str, Any]] = {}
+        
+        # Process each query sequentially to avoid rate limits
+        # NOTE: Queries MUST run sequentially, not in parallel, to share Slack API rate limits
+        for query in self._queries:
+            search_state = self._get_query_state(slack_state, query)
+            last_seen = search_state.get("last_seen_ts")
+            if not isinstance(last_seen, str):
+                last_seen = None
+
+            processed, newest_ts = self._process_search_results(
+                query=query,
+                oldest=last_seen,
+                cutoff=None,
+                user_cache=user_cache,
+                channel_cache=channel_cache,
+                skip_until=last_seen,
+            )
+            total_processed += processed
+            
+            # Store state for this query
+            query_states[query] = {"last_seen_ts": newest_ts} if newest_ts else {}
+
+        # Save caches back to disk
+        self._save_persistent_cache("user", user_cache)
+        self._save_persistent_cache("channel", channel_cache)
 
         payload = self._build_state_payload(
-            newest_ts,
             user_cache,
             channel_cache,
+            query_states,
             extra={"last_run_at": datetime.now(timezone.utc).isoformat()},
         )
         self.state_store.update_state({"slack": payload})
-        return processed
+        return total_processed
 
     def backfill(self, newer_than_days: int | None = None) -> int:
         """Load historical Slack messages within the requested window."""
@@ -109,29 +150,46 @@ class SlackPoller:
         slack_state = state.get("slack") if isinstance(state.get("slack"), Mapping) else {}
         if not isinstance(slack_state, Mapping):
             slack_state = {}
-        search_state = (
-            slack_state.get("search") if isinstance(slack_state.get("search"), Mapping) else {}
-        )
-        last_seen = search_state.get("last_seen_ts") if isinstance(search_state, Mapping) else None
-        if not isinstance(last_seen, str):
-            last_seen = None
 
-        user_cache = self._load_user_cache(slack_state.get("users"))
-        channel_cache = self._load_channel_cache(slack_state.get("channels"))
+        # Load from persistent disk cache first, then merge with state cache
+        user_cache = self._load_persistent_cache("user")
+        user_cache.update(self._load_user_cache(slack_state.get("users")))
+        channel_cache = self._load_persistent_cache("channel")
+        channel_cache.update(self._load_channel_cache(slack_state.get("channels")))
 
-        processed, newest_ts = self._process_search_results(
-            oldest=oldest_ts,
-            cutoff=cutoff_dt,
-            user_cache=user_cache,
-            channel_cache=channel_cache,
-            skip_until=None,
-        )
+        total_processed = 0
+        query_states: dict[str, dict[str, Any]] = {}
+        
+        # Backfill each query sequentially to avoid rate limits
+        # NOTE: Queries MUST run sequentially, not in parallel, to share Slack API rate limits
+        for query in self._queries:
+            search_state = self._get_query_state(slack_state, query)
+            last_seen = search_state.get("last_seen_ts")
+            if not isinstance(last_seen, str):
+                last_seen = None
 
-        combined_last_seen = self._max_ts(last_seen, newest_ts) if newest_ts else last_seen
+            processed, newest_ts = self._process_search_results(
+                query=query,
+                oldest=oldest_ts,
+                cutoff=cutoff_dt,
+                user_cache=user_cache,
+                channel_cache=channel_cache,
+                skip_until=None,
+            )
+            total_processed += processed
+            
+            # Combine with existing last_seen for this query
+            combined_last_seen = self._max_ts(last_seen, newest_ts) if newest_ts else last_seen
+            query_states[query] = {"last_seen_ts": combined_last_seen} if combined_last_seen else {}
+
+        # Save caches back to disk
+        self._save_persistent_cache("user", user_cache)
+        self._save_persistent_cache("channel", channel_cache)
+
         payload = self._build_state_payload(
-            combined_last_seen,
             user_cache,
             channel_cache,
+            query_states,
             extra={
                 "last_run_at": datetime.now(timezone.utc).isoformat(),
                 "backfilled_days": days,
@@ -139,11 +197,12 @@ class SlackPoller:
             },
         )
         self.state_store.update_state({"slack": payload})
-        return processed
+        return total_processed
 
     def _process_search_results(
         self,
         *,
+        query: str,
         oldest: str | None,
         cutoff: datetime | None,
         user_cache: MutableMapping[str, dict[str, str]],
@@ -152,7 +211,7 @@ class SlackPoller:
     ) -> tuple[int, str | None]:
         processed = 0
         newest_ts = skip_until
-        for payload in self._search_messages(oldest):
+        for payload in self._search_messages(query, oldest):
             episode = self._normalise_message(payload, user_cache, channel_cache)
             if episode is None:
                 continue
@@ -165,12 +224,12 @@ class SlackPoller:
             newest_ts = self._max_ts(newest_ts, episode.version)
         return processed, newest_ts
 
-    def _search_messages(self, oldest: str | None) -> Iterable[Mapping[str, object]]:
+    def _search_messages(self, query: str, oldest: str | None) -> Iterable[Mapping[str, object]]:
         cursor: str | None = None
         while True:
             page = self._call_with_backoff(
                 self.client.search_messages,
-                self._query,
+                query,
                 oldest=oldest,
                 cursor=cursor,
             )
@@ -211,6 +270,17 @@ class SlackPoller:
         user_info = self._resolve_user(user_id, user_cache) if user_id else None
         channel_info = self._resolve_channel(channel_id, channel_cache, full_payload.get("channel"))
 
+        # For DMs, resolve the other user's information
+        channel_payload = full_payload.get("channel")
+        dm_user_info = None
+        is_dm = False
+        if isinstance(channel_payload, Mapping):
+            is_dm = channel_payload.get("is_im") or channel_payload.get("is_mpim")
+            if is_dm:
+                dm_user_id = channel_payload.get("user")
+                if isinstance(dm_user_id, str) and dm_user_id.strip():
+                    dm_user_info = self._resolve_user(dm_user_id, user_cache)
+
         text = full_payload.get("text")
         if text is not None and not isinstance(text, str):
             text = str(text)
@@ -220,7 +290,10 @@ class SlackPoller:
 
         metadata: dict[str, Any] = {
             "channel_id": channel_id,
-            "channel_name": channel_info.get("name") if channel_info else None,
+            "channel_name": channel_info.get("name") if channel_info and not is_dm else None,
+            "dm_with_user_id": dm_user_info.get("id") if dm_user_info else None,
+            "dm_with_user_name": dm_user_info.get("name") if dm_user_info else None,
+            "dm_with_user_email": dm_user_info.get("email") if dm_user_info else None,
             "user_id": user_id,
             "user_name": user_info.get("name") if user_info else None,
             "user_email": user_info.get("email") if user_info else None,
@@ -287,7 +360,9 @@ class SlackPoller:
                 return func(*args, **kwargs)
             except SlackRateLimited as exc:
                 sleep_for = max(delay, exc.retry_after)
-                time.sleep(sleep_for)
+                # Add jitter: random value between 0 and sleep_for
+                jittered_sleep = sleep_for * (0.5 + random.random() * 0.5)
+                time.sleep(jittered_sleep)
                 delay = min(sleep_for * 2, 60.0)
         return func(*args, **kwargs)
 
@@ -388,23 +463,31 @@ class SlackPoller:
             cache[str(key)] = record
         return cache
 
+    def _get_query_state(self, slack_state: Mapping[str, object], query: str) -> dict[str, Any]:
+        """Get the state for a specific query."""
+        queries_state = slack_state.get("queries")
+        if not isinstance(queries_state, Mapping):
+            return {}
+        query_state = queries_state.get(query)
+        if not isinstance(query_state, Mapping):
+            return {}
+        return dict(query_state)
+
     def _build_state_payload(
         self,
-        newest_ts: str | None,
         user_cache: Mapping[str, dict[str, str]],
         channel_cache: Mapping[str, dict[str, str]],
+        query_states: Mapping[str, dict[str, Any]],
         *,
         extra: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "search": {"query": self._query},
+            "queries": {query: dict(state) for query, state in query_states.items()},
             "users": {key: dict(value) for key, value in user_cache.items()},
             "channels": {key: dict(value) for key, value in channel_cache.items()},
             "checkpoints": None,
             "threads": None,
         }
-        if newest_ts:
-            payload["search"]["last_seen_ts"] = newest_ts
         if extra:
             payload.update(extra)
         return payload

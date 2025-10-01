@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, Protocol
@@ -26,6 +26,8 @@ class CalendarClient(Protocol):  # pragma: no cover - protocol definition
     def list_events(self, calendar_id: str, sync_token: str | None) -> CalendarEventsPage: ...
 
     def full_sync(self, calendar_id: str) -> CalendarEventsPage: ...
+    
+    def fetch_transcript_from_attachment(self, file_id: str) -> str | None: ...
 
 
 class CalendarPoller:
@@ -65,6 +67,11 @@ class CalendarPoller:
                 page = self._client.full_sync(calendar_id)
 
             for event in page.events:
+                # Skip cancelled/deleted events
+                status = event.get("status")
+                if status == "cancelled":
+                    continue
+                    
                 episode = self._processor.process(
                     self._normalize_event(calendar_id, event)
                 )
@@ -93,6 +100,11 @@ class CalendarPoller:
         for calendar_id in self._calendar_ids:
             page = self._client.full_sync(calendar_id)
             for event in page.events:
+                # Skip cancelled/deleted events
+                status = event.get("status")
+                if status == "cancelled":
+                    continue
+                    
                 episode = self._normalize_event(calendar_id, event)
                 if episode.valid_at and episode.valid_at < cutoff:
                     continue
@@ -122,7 +134,18 @@ class CalendarPoller:
         if not isinstance(updated, str):
             raise ValueError(f"Event {event_id} missing updated timestamp")
 
-        valid_at = self._parse_time(updated) or datetime.now(timezone.utc)
+        # Use event start time for valid_at, fall back to updated time if not available
+        start = event.get("start")
+        start_time = None
+        if isinstance(start, Mapping):
+            # Try dateTime first (for events with specific times)
+            start_time = start.get("dateTime") or start.get("date")
+        
+        if isinstance(start_time, str):
+            valid_at = self._parse_time(start_time) or self._parse_time(updated) or datetime.now(timezone.utc)
+        else:
+            valid_at = self._parse_time(updated) or datetime.now(timezone.utc)
+        
         version = updated
         metadata = {
             "calendar_id": calendar_id,
@@ -135,17 +158,44 @@ class CalendarPoller:
             metadata["location"] = location
         attendees = event.get("attendees")
         if isinstance(attendees, list) and attendees:
-            metadata["attendees"] = attendees
+            metadata["attendees_json"] = json.dumps(attendees)
+        
+        # Check for attachments and fetch transcript content
+        attachments = event.get("attachments")
+        transcript_text = None
+        if isinstance(attachments, list):
+            metadata["attachments_json"] = json.dumps(attachments)
+            # Look for "Notes by Gemini" or similar transcript docs
+            for attachment in attachments:
+                if isinstance(attachment, dict):
+                    title = attachment.get("title", "")
+                    file_id = attachment.get("fileId")
+                    if file_id and ("Notes by Gemini" in title or "Transcript" in title):
+                        try:
+                            transcript_text = self._client.fetch_transcript_from_attachment(file_id)
+                            if transcript_text:
+                                metadata["transcript_file_id"] = file_id
+                                metadata["transcript_title"] = title
+                                break  # Use first transcript found
+                        except Exception:
+                            pass  # Silently skip if fetch fails
+        
         json_payload = dict(event)
         if status == "cancelled":
             json_payload = {"cancelled": True, "event": dict(event)}
 
+        # Combine event summary/description with transcript if available
+        text_content = event.get("summary", "")
+        if transcript_text:
+            text_content = f"{text_content}\n\n{transcript_text}"
+        
         return Episode(
             group_id=self._group_id,
             source="calendar",
             native_id=event_id,
             version=version,
             valid_at=valid_at,
+            text=text_content if text_content else None,
             json=json_payload,
             metadata=metadata,
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, Protocol
@@ -166,12 +167,17 @@ class DrivePoller:
             "webViewLink": file_metadata.get("webViewLink"),
             "url": file_metadata.get("webViewLink") or file_metadata.get("webContentLink"),
         }
-        metadata.update({k: v for k, v in content.metadata.items()})
+        # Merge content metadata, serializing any complex types
+        for k, v in content.metadata.items():
+            if isinstance(v, (dict, list)):
+                metadata[f"{k}_json"] = json.dumps(v)
+            else:
+                metadata[k] = v
         if revision_id and "revisionId" not in metadata:
             metadata["revisionId"] = revision_id
-        owners = metadata.get("owners") or file_metadata.get("owners")
-        if owners is not None:
-            metadata["owners"] = owners
+        owners = file_metadata.get("owners")
+        if owners is not None and isinstance(owners, list):
+            metadata["owners_json"] = json.dumps(owners)
 
         return Episode(
             group_id=self._group_id,

@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt uvicorn
+
+# Copy application code
+COPY graphiti/ ./graphiti/
+
+# Expose port for web UI
+EXPOSE 8128
+
+# Run the web admin UI
+CMD ["uvicorn", "graphiti.web_admin.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8128"]
+

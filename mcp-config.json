@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "personal-assistant": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "personal-assistant-personal-assistant-1",
+        "python",
+        "-m",
+        "graphiti"
+      ],
+      "description": "Personal Assistant - Query your knowledge graph built from Gmail, Drive, Calendar, and Slack"
+    }
+  }
+}
+

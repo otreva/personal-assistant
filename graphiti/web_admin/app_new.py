@@ -73,7 +73,7 @@ def create_app(config_path: Path | None = None) -> FastAPI:
         log_store=log_store,
     )
 
-    app = FastAPI(title="Personal Assistant Admin", version="1.0.17")
+    app = FastAPI(title="Personal Assistant Admin", version="1.0.0")
     
     # Mount static files
     static_dir = Path(__file__).parent / "static"
@@ -169,14 +169,6 @@ def create_app(config_path: Path | None = None) -> FastAPI:
 
     # Routes
     @app.get("/", response_class=HTMLResponse)
-    @app.get("/connections", response_class=HTMLResponse)
-    @app.get("/google", response_class=HTMLResponse)
-    @app.get("/slack", response_class=HTMLResponse)
-    @app.get("/redaction", response_class=HTMLResponse)
-    @app.get("/episodes", response_class=HTMLResponse)
-    @app.get("/backups", response_class=HTMLResponse)
-    @app.get("/logs", response_class=HTMLResponse)
-    @app.get("/operations", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         """Serve the main admin UI page."""
         config = store.load()
@@ -336,8 +328,7 @@ def create_app(config_path: Path | None = None) -> FastAPI:
         tokens = load_token_section(state_store, "slack")
         return {
             "workspace": tokens.get("workspace", ""),
-            "has_token": bool(tokens.get("slack_token")),
-            "has_cookie": bool(tokens.get("slack_cookie")),
+            "has_token": bool(tokens.get("user_token")),
             "updated_at": tokens.get("updated_at"),
         }
 
@@ -346,14 +337,11 @@ def create_app(config_path: Path | None = None) -> FastAPI:
         """Update Slack credentials."""
         tokens = {
             "workspace": payload.workspace.strip(),
-            "slack_token": payload.slack_token.strip(),
-            "slack_cookie": payload.slack_cookie.strip(),
+            "user_token": payload.user_token.strip(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if not tokens["slack_token"]:
-            raise HTTPException(status_code=400, detail="A Slack token is required.")
-        if not tokens["slack_cookie"]:
-            raise HTTPException(status_code=400, detail="A Slack cookie is required.")
+        if not tokens["user_token"]:
+            raise HTTPException(status_code=400, detail="A Slack user token is required.")
         saved = persist_token_section(state_store, "slack", tokens)
         log_store.append(
             "system",
@@ -472,107 +460,9 @@ def create_app(config_path: Path | None = None) -> FastAPI:
         result = await _run_poller_once(source)
         return result
 
-    @app.get("/api/episodes")
-    async def get_episodes(
-        source: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        """Browse episodes with optional filtering by source."""
-        print(f"DEBUG: get_episodes called with source={source}, limit={limit}, offset={offset}")
-        config = store.load()
-        episode_store = create_episode_store(config)
-        
-        try:
-            def _query_episodes():
-                from neo4j import GraphDatabase
-                driver = getattr(episode_store, "_driver", None)
-                if not driver:
-                    return []
-                
-                with driver.session() as session:
-                    query = """
-                    MATCH (e:Episode {group_id: $group_id})
-                    """
-                    params = {"group_id": config.group_id, "limit": limit, "offset": offset}
-                    
-                    if source:
-                        query += "\n                    WHERE e.source = $source"
-                        params["source"] = source
-                    
-                    query += """
-                    RETURN e.episode_id AS episode_id,
-                           e.source AS source,
-                           e.native_id AS native_id,
-                           e.version AS version,
-                           e.valid_at AS valid_at,
-                           e.text AS text,
-                           e.metadata_json AS metadata_json,
-                           e.json_data AS json_data
-                    ORDER BY e.valid_at DESC
-                    SKIP $offset
-                    LIMIT $limit
-                    """
-                    
-                    result = session.run(query, params)
-                    episodes = []
-                    for record in result:
-                        episode = {
-                            "episode_id": record["episode_id"],
-                            "source": record["source"],
-                            "native_id": record["native_id"],
-                            "version": record["version"],
-                            "valid_at": record["valid_at"],
-                            "text": record["text"],
-                            "metadata_json": record["metadata_json"],
-                            "json_data": record["json_data"],
-                        }
-                        episodes.append(episode)
-                    return episodes
-            
-            episodes = await asyncio.to_thread(_query_episodes)
-            return {
-                "episodes": episodes,
-                "count": len(episodes),
-                "source": source,
-                "limit": limit,
-                "offset": offset,
-            }
-        finally:
-            close_episode_store(episode_store)
-
-    @app.get("/api/episodes/stats")
-    async def get_episode_stats() -> dict[str, Any]:
-        """Get episode statistics by source."""
-        config = store.load()
-        episode_store = create_episode_store(config)
-        
-        try:
-            def _query_stats():
-                from neo4j import GraphDatabase
-                driver = getattr(episode_store, "_driver", None)
-                if not driver:
-                    return {}
-                
-                with driver.session() as session:
-                    query = """
-                    MATCH (e:Episode {group_id: $group_id})
-                    RETURN e.source AS source, count(*) AS count
-                    ORDER BY source
-                    """
-                    result = session.run(query, {"group_id": config.group_id})
-                    stats = {}
-                    for record in result:
-                        stats[record["source"]] = record["count"]
-                    return stats
-            
-            stats = await asyncio.to_thread(_query_stats)
-            return {"stats": stats, "total": sum(stats.values())}
-        finally:
-            close_episode_store(episode_store)
-
     return app
 
 
 __all__ = ["create_app"]
+
 

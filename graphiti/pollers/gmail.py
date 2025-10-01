@@ -1,6 +1,7 @@
 """Gmail poller implementation."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, Protocol
@@ -157,7 +158,7 @@ class GmailPoller:
         metadata = {
             "message_id": message_id,
             "thread_id": thread_id,
-            "headers": headers,
+            "headers_json": json.dumps(headers) if headers else "{}",
         }
         if from_addr:
             metadata["from"] = from_addr

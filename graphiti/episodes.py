@@ -1,6 +1,7 @@
 """Episode data model and persistence helpers."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Mapping, Optional
@@ -31,14 +32,13 @@ class Episode:
             "version": self.version,
             "episode_id": self.episode_id(),
             "valid_at": self.valid_at.isoformat(),
-            "metadata": dict(self.metadata),
+            "invalid_at": self.invalid_at.isoformat() if self.invalid_at else None,
+            "metadata_json": json.dumps(dict(self.metadata)),
         }
-        if self.invalid_at:
-            payload["invalid_at"] = self.invalid_at.isoformat()
         if self.text is not None:
             payload["text"] = self.text
         if self.json is not None:
-            payload["json"] = dict(self.json)
+            payload["json_data"] = json.dumps(dict(self.json))
         return payload
 
 
@@ -50,7 +50,7 @@ class Neo4jEpisodeStore:
         self._group_id = group_id
 
     def upsert_episode(self, episode: Episode) -> None:
-        """Insert a new episode version and invalidate the prior one."""
+        """Insert or update an episode (overwrites existing with same source:native_id)."""
 
         if episode.group_id != self._group_id:
             raise ValueError(
@@ -58,7 +58,6 @@ class Neo4jEpisodeStore:
             )
 
         with self._driver.session() as session:
-            session.execute_write(self._invalidate_previous_version, episode)
             session.execute_write(self._write_episode, episode)
 
     @property
@@ -79,14 +78,17 @@ class Neo4jEpisodeStore:
     @staticmethod
     def _write_episode(tx, episode: Episode) -> None:  # pragma: no cover - executed via driver mocks
         properties = episode.to_properties()
+        # Use source + native_id as the unique key (ignore version for deduplication)
+        unique_key = f"{episode.source}:{episode.native_id}"
         tx.run(
             """
             MERGE (g:Group {group_id: $group_id})
-            MERGE (g)-[:HAS_EPISODE]->(e:Episode {episode_id: $episode_id})
+            MERGE (g)-[:HAS_EPISODE]->(e:Episode {group_id: $group_id, source: $source, native_id: $native_id})
             SET e = $properties
             """,
             group_id=episode.group_id,
-            episode_id=properties["episode_id"],
+            source=episode.source,
+            native_id=episode.native_id,
             properties=properties,
         )
 

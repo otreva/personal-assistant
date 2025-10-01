@@ -166,7 +166,14 @@ class EpisodeProcessor:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
 
-        if self._summariser:
+        # Skip summarization for calendar events with transcripts (preserve full content)
+        has_transcript = (
+            episode.source == "calendar" 
+            and isinstance(metadata, Mapping) 
+            and metadata.get("transcript_file_id")
+        )
+        
+        if self._summariser and not has_transcript:
             result = self._summariser.summarise(text)
             if result is not None:
                 text = result.summary

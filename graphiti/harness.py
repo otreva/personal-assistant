@@ -50,7 +50,13 @@ class AcceptanceTestHarness:
             raise ValueError("Episode store group_id does not match configuration group_id")
 
     def run(self, dataset: AcceptanceDataset) -> Mapping[str, int]:
-        """Execute pollers against the provided dataset and return processed counts."""
+        """Execute pollers against the provided dataset and return processed counts.
+        
+        NOTE: Pollers run sequentially to respect API rate limits:
+        - Google pollers (Gmail, Drive, Calendar) share OAuth credentials and run sequentially
+        - Slack queries run sequentially within the Slack poller
+        - Slack and Google can run in parallel since they use different API credentials
+        """
 
         if dataset.state_seed:
             self._state.save_state(dataset.state_seed)
@@ -62,6 +68,7 @@ class AcceptanceTestHarness:
 
         metrics: MutableMapping[str, int] = {}
 
+        # Google pollers run sequentially (share OAuth credentials and rate limits)
         gmail_poller = GmailPoller(gmail_client, self.episode_store, self._state, self._config)
         metrics["gmail"] = gmail_poller.run_once()
 
@@ -77,6 +84,7 @@ class AcceptanceTestHarness:
         )
         metrics["calendar"] = calendar_poller.run_once()
 
+        # Slack poller runs its queries sequentially internally
         slack_poller = SlackPoller(
             slack_client,
             self.episode_store,

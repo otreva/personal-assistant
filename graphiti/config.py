@@ -46,12 +46,12 @@ DEFAULT_BACKUP_DIR = str((Path.home() / STATE_DIR_NAME / "backups").resolve())
 class GraphitiConfig:
     """Application configuration persisted to `config.json`."""
 
-    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_uri: str = "bolt://neo4j:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "password"
+    neo4j_password: str = "localgraph"
     google_client_id: str = ""
     google_client_secret: str = ""
-    group_id: str = "mike_assistant"
+    group_id: str = "my_assistant"
     poll_gmail_drive_calendar_seconds: int = 3600
     poll_slack_active_seconds: int = 30
     poll_slack_idle_seconds: int = 3600
@@ -60,7 +60,7 @@ class GraphitiConfig:
     drive_backfill_days: int = 365
     calendar_backfill_days: int = 365
     slack_backfill_days: int = 365
-    slack_search_query: str = ""
+    slack_search_queries: tuple[str, ...] = ()
     calendar_ids: tuple[str, ...] = ("primary",)
     redaction_rules_path: str | None = None
     redaction_rules: tuple[tuple[str, str], ...] = ()
@@ -126,11 +126,8 @@ class GraphitiConfig:
             slack_backfill_days=get_int(
                 "SLACK_BACKFILL_DAYS", defaults.slack_backfill_days
             ),
-            slack_search_query=(
-                _clean_optional_str(
-                    values.get("SLACK_SEARCH_QUERY"), defaults.slack_search_query
-                )
-                or ""
+            slack_search_queries=_parse_csv(
+                values.get("SLACK_SEARCH_QUERIES"), defaults.slack_search_queries
             ),
             calendar_ids=_parse_csv(
                 values.get("CALENDAR_IDS"), defaults.calendar_ids
@@ -259,9 +256,7 @@ class GraphitiConfig:
             slack_backfill_days=get_int(
                 "slack_backfill_days", defaults.slack_backfill_days
             ),
-            slack_search_query=get_str(
-                "slack_search_query", defaults.slack_search_query
-            ).strip(),
+            slack_search_queries=get_seq("slack_search_queries", defaults.slack_search_queries),
             calendar_ids=get_seq("calendar_ids", defaults.calendar_ids),
             redaction_rules_path=values.get(
                 "redaction_rules_path", defaults.redaction_rules_path
@@ -297,7 +292,7 @@ class GraphitiConfig:
 
     def to_json(self) -> Dict[str, Any]:
         payload = asdict(self)
-        payload["slack_search_query"] = self.slack_search_query
+        payload["slack_search_queries"] = list(self.slack_search_queries)
         payload["calendar_ids"] = list(self.calendar_ids)
         payload["redaction_rules"] = [
             {"pattern": pattern, "replacement": replacement}
@@ -464,7 +459,7 @@ ENV_KEYS = {
     "DRIVE_BACKFILL_DAYS",
     "CALENDAR_BACKFILL_DAYS",
     "SLACK_BACKFILL_DAYS",
-    "SLACK_SEARCH_QUERY",
+    "SLACK_SEARCH_QUERIES",
     "CALENDAR_IDS",
     "REDACTION_RULES_PATH",
     "REDACTION_RULES",
