@@ -22,6 +22,8 @@ class GraphitiConfig:
     poll_slack_active_seconds: int = 30
     poll_slack_idle_seconds: int = 3600
     gmail_fallback_days: int = 7
+    slack_channel_allowlist: tuple[str, ...] = ()
+    calendar_ids: tuple[str, ...] = ("primary",)
 
     @classmethod
     def from_mapping(
@@ -59,7 +61,22 @@ class GraphitiConfig:
             gmail_fallback_days=get_int(
                 "GMAIL_FALLBACK_DAYS", defaults.gmail_fallback_days
             ),
+            slack_channel_allowlist=_parse_csv(
+                values.get("SLACK_CHANNEL_ALLOWLIST"), defaults.slack_channel_allowlist
+            ),
+            calendar_ids=_parse_csv(
+                values.get("CALENDAR_IDS"), defaults.calendar_ids
+            ),
         )
+
+
+def _parse_csv(raw: Optional[str], default: tuple[str, ...]) -> tuple[str, ...]:
+    if raw is None:
+        return default
+    items = [item.strip() for item in raw.split(",") if item.strip()]
+    if not items:
+        return ()
+    return tuple(dict.fromkeys(items))
 
 
 def _parse_dotenv(path: Path) -> Dict[str, str]:
