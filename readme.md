@@ -37,24 +37,32 @@ cd personal-assistant
 
 ### 2. Launch the Dockerised admin UI
 
-Graphiti ships with a `docker-compose.yml` file and a convenience script that mount the
-repository into a stock `python:3.12-slim` container, install runtime dependencies,
-and start the admin UI. No local Python environment is required.
+Graphiti ships with a `docker-compose.yml` file that now boots both the admin UI and a
+Neo4j 5 instance. The compose stack mounts your repository, caches Python dependencies,
+and persists Neo4j data to `./neo4j/` so you can tear the stack down without losing the
+database. No local Python environment is required.
 
-- **Using Docker Compose** (recommended if you want the container to stay running):
+- **Using Docker Compose** (recommended for day-to-day operation):
 
   ```bash
-  docker compose up graphiti
+  docker compose up
   ```
 
-- **Using the helper script** (runs a one-off container):
+  This command starts the admin UI on <http://localhost:8000> and exposes Neo4j on
+  <bolt://localhost:7687>. Press `Ctrl+C` to stop the stack and rerun the command to
+  resume from the persisted volumes.
+
+- **Using the helper script** (runs a one-off container for the admin UI only):
 
   ```bash
   ./scripts/docker-run.sh
   ```
 
-Both approaches expose the admin UI on <http://localhost:8000>. The first run installs
-Python dependencies into a cached Docker volume; subsequent runs reuse the cache.
+  The script is handy for quick checks but does not manage Neo4j or reuse cached
+  dependencies between invocations.
+
+Both approaches expose the admin UI on <http://localhost:8000>. The first compose run
+builds the Python environment; subsequent runs reuse the cached volume for faster starts.
 
 ### 3. Configure Graphiti from the web admin
 
@@ -67,169 +75,92 @@ custom logs directory in the **Backups & Logging** section, then click **Save
 configuration**. The values are persisted back to `~/.graphiti_sync/config.json` with
 secure permissions.
 
-> **Note:** Environment variables and `.env` files are no longer required. The CLI and
-> pollers read directly from the JSON configuration managed by the admin UI. Environment
-> variables are still accepted as overrides for automation but are not needed for day-to-day
-> use.
+> **Note:** Environment variables and `.env` files are no longer required. The admin UI
+> persists configuration to `~/.graphiti_sync/config.json` and the compose stack creates
+> the state directory with secure permissions on first launch.
 
-### 4. Start Neo4j locally
+### 4. Review the state directory
 
-Run Neo4j in Docker with an isolated password (change `localgraph` to your secret):
+Graphiti stores OAuth tokens, poller checkpoints, and configuration under
+`~/.graphiti_sync/`. The admin UI surfaces the active paths in the **Backups & Logging**
+tab and automatically manages file permissions—no manual commands required.
 
-```bash
-docker run -d \
-  --name graphiti-neo4j \
-  -p 7687:7687 -p 7474:7474 \
-  -e NEO4J_AUTH=neo4j/localgraph \
-  neo4j:5
-```
+### 5. Create Google API credentials
 
-Confirm the service is reachable:
+1. In the Google Cloud Console, create an OAuth client (Desktop or Web application) for the
+   Gmail, Drive, and Calendar APIs.
+2. Copy the generated client ID and client secret.
+3. In the admin UI open **Connections → Google Workspace OAuth**, paste the client ID and
+   secret, click **Save configuration**, and then click **Sign in with Google**. Complete the
+   consent flow to grant the requested read-only scopes. The admin UI stores the refresh token
+   and keeps the secret masked while it lives on disk.
 
-```bash
-cypher-shell -u neo4j -p localgraph "RETURN 1"
-```
+### 6. Generate a Slack user token
 
-### 5. Initialise the state directory
-
-Graphiti stores OAuth tokens and poller checkpoints under `~/.graphiti_sync/`. Run the status command once to create the directory with the correct permissions:
-
-```bash
-python -m graphiti.cli status
-```
-
-The command prints the resolved configuration and confirms paths to `tokens.json` and `state.json`.
-
-### 6. Create Google API credentials
-
-1. In the Google Cloud Console, create an OAuth client for Desktop applications.
-2. Download the client secrets JSON and use Google’s OAuth Playground or [`gcloud auth application-default print-access-token`](https://cloud.google.com/sdk/gcloud/reference/auth/application-default/print-access-token) to perform the OAuth consent flow for the scopes:
-   - `https://www.googleapis.com/auth/gmail.readonly`
-   - `https://www.googleapis.com/auth/drive.readonly`
-   - `https://www.googleapis.com/auth/calendar.readonly`
-3. Copy the resulting refresh token and client details into `~/.graphiti_sync/tokens.json` using the structure below:
-
-```json
-{
-  "google": {
-    "client_id": "YOUR_CLIENT_ID",
-    "client_secret": "YOUR_CLIENT_SECRET",
-    "refresh_token": "YOUR_REFRESH_TOKEN",
-    "scopes": [
-      "https://www.googleapis.com/auth/gmail.readonly",
-      "https://www.googleapis.com/auth/drive.readonly",
-      "https://www.googleapis.com/auth/calendar.readonly"
-    ]
-  }
-}
-```
-
-4. Restrict file permissions to the current user (`chmod 600 ~/.graphiti_sync/tokens.json`).
-
-### 7. Generate a Slack user token
-
-1. Visit <https://api.slack.com/apps>, create a new app, and enable the following user token scopes:
+1. Visit <https://api.slack.com/apps>, create a new app, and enable the following user token
+   scopes:
    - `channels:history`, `channels:read`
    - `groups:history`, `groups:read`
    - `im:history`, `im:read`
    - `mpim:history`, `mpim:read`
 2. Install the app to your workspace and copy the generated `xoxp-` token.
-3. Extend `~/.graphiti_sync/tokens.json` with the Slack credentials:
+3. In the admin UI open **Connections → Slack Workspace**, provide an optional workspace
+   label, paste the user token, and click **Save Slack Credentials**. The token is stored in
+   `~/.graphiti_sync/tokens.json` with user-only permissions.
 
-```json
-{
-  "google": { ... },
-  "slack": {
-    "user_token": "xoxp-your-token",
-    "workspace": "your-workspace"
-  }
-}
-```
+### 7. Verify configuration and inventory Slack channels
 
-4. Limit file permissions again (`chmod 600 ~/.graphiti_sync/tokens.json`).
+Use the **Inventory Slack Channels** button in the Slack Workspace card to fetch all
+available channels and persist their metadata to state. The results appear inline and
+respect the allowlist configured in the **Polling Behaviour** section.
 
-### 8. Verify configuration and inventory Slack channels
-
-List available Slack channels (and persist their metadata/IDs to state):
-
-```bash
-python -m graphiti.cli sync slack --list-channels
-```
-
-The output is a JSON array of channels that Graphiti will poll. You can further restrict ingestion by setting `SLACK_CHANNEL_ALLOWLIST` in `.env` before running this command.
-
-### 9. Backfill the last year of history
+### 8. Backfill the last year of history
 
 From the admin UI scroll to **Manual Historical Load** and run the Gmail, Drive,
 Calendar, and Slack backfills. The defaults load 365 days of activity and include
 rate-limit friendly pauses with jitter. You can rerun the loader at any time to fetch
 additional history without affecting incremental checkpoints.
 
-### 10. Run the pollers to seed Graphiti
+### 9. Run the pollers to seed Graphiti
 
-Execute each poller once to ingest the latest activity:
+Use the **Run Pollers Once** section in the admin UI to trigger Gmail, Drive, Calendar,
+and Slack pollers on demand. The UI displays the number of episodes processed and records
+structured log entries for each run so you can confirm incremental sync without touching
+the terminal.
 
-```bash
-python -m graphiti.cli sync gmail --once
-python -m graphiti.cli sync drive --once
-python -m graphiti.cli sync calendar --once
-python -m graphiti.cli sync slack --once
-```
-
-Each command prints a JSON summary including how many episodes were written and the execution timestamp. Rerun the commands whenever you need a manual refresh.
-
-### 11. (Optional) Log MCP / Cursor turns
+### 10. (Optional) Log MCP / Cursor turns
 
 Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging them through `graphiti.mcp.logger.McpEpisodeLogger`. The logger batches turns and writes them via the same episode pipeline used by the pollers.
 
-### 12. Monitor health and scheduling
+### 11. Monitor health and scheduling
 
-- **Status dashboard:**
-  ```bash
-  python -m graphiti.cli sync status
-  ```
-  This prints a textual dashboard with the last run time, next due interval, and error counts per source.
+- The **Logs** section of the admin UI lets you filter categories, change retention windows,
+  and inspect structured entries without leaving the browser.
+- The **Backups** card shows on-demand backup results alongside the automated overnight job.
+- Status messages above each manual action (backfills, pollers, Slack inventory) record the
+  last run so you can confirm ingestion health at a glance.
+- Optional automation: if you need a machine-readable endpoint for external monitors, you
+  can still launch `uvicorn "graphiti.health:create_health_app" --factory --reload` in a
+  separate process to expose `/health`.
 
-- **JSON status:**
-  ```bash
-  python -m graphiti.cli sync status --json
-  ```
-
-- **Health endpoint:**
-  ```bash
-  uvicorn "graphiti.health:create_health_app" --factory --reload
-  ```
-  Visit `http://localhost:8000/health` for a machine-readable summary.
-
-- **Scheduler stub:**
-  ```bash
-  python -m graphiti.cli sync scheduler --once
-  ```
-  This sequentially runs all pollers and prints aggregate metrics. Use the output to wire Graphiti into a `launchd` or cron job.
-- **Admin UI log viewer:** Open the **Logs** section in the web admin to stream the last *N* days of structured log entries (configurable via the Backups & Logging form).
-
-### 13. Back up and restore state
+### 12. Back up and restore state
 
 Graphiti automatically creates a timestamped `.tar.gz` backup of `~/.graphiti_sync/`
 every day at **02:00 EST**. Archives are written to the directory configured in the
 admin UI (default `~/.graphiti_sync/backups`) and older files are pruned according to the
-retention window. You can trigger an ad-hoc backup from the UI or via the CLI:
+retention window. Use the **Run Backup** button in the Backups card to trigger an ad-hoc
+archive directly from the browser.
 
-Create a timestamped archive of `~/.graphiti_sync/`:
-
-```bash
-python -m graphiti.cli backup state --output ~/Backups
-```
-
-Restore from an archive and reapply file permissions automatically:
+If you need to script restores, the existing CLI helpers remain available:
 
 ```bash
 python -m graphiti.cli restore state ~/Backups/graphiti-state-YYYYMMDDHHMMSS.tar.gz
 ```
 
-Run the relevant `sync ... --once` commands afterward to resume polling from the restored checkpoints.
+After restoring, rerun the pollers from the admin UI to resume incremental sync from the
+recovered checkpoints.
 
-### 14. Validate with the acceptance harness (optional)
+### 13. Validate with the acceptance harness (optional)
 
 To execute the tests inside Docker without installing Python locally, run:
 
