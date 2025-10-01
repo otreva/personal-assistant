@@ -659,7 +659,7 @@ def _render_index(payload: ConfigPayload) -> str:
   </script>
 </body>
 </html>""")
-    return template.substitute(
+    return template.safe_substitute(
         neo4j_uri=escape(payload.neo4j_uri),
         neo4j_user=escape(payload.neo4j_user),
         neo4j_password=escape(payload.neo4j_password),
