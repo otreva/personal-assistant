@@ -96,8 +96,10 @@ def test_slack_poller_processes_messages_and_threads(state_store, monkeypatch):
     assert processed == 3
     assert len(episode_store.episodes) == 3
     state = state_store.load_state()["slack"]
-    assert state["checkpoints"]["C1"] == "1704067201.0"
-    assert state["threads"]["C1"][ts] == "1704067300.0"
+    assert state["channels"]["C1"]["last_seen_ts"] == "1704067201.0"
+    assert state["channels"]["C1"]["metadata"]["name"] == "general"
+    assert state["threads"]["C1"][ts]["last_seen_ts"] == "1704067300.0"
+    assert state.get("checkpoints") is None
 
 
 def test_slack_poller_honors_allowlist(state_store):
@@ -105,7 +107,16 @@ def test_slack_poller_honors_allowlist(state_store):
     episode_store = InMemoryEpisodeStore(group_id="group")
     client = FakeSlackClient(({"id": "C1", "name": "general"}, {"id": "C2", "name": "restricted"}))
     poller = SlackPoller(client, episode_store, state_store, config=config)
-    state_store.update_state({"slack": {"channels": {"C1": {"name": "general"}, "C2": {"name": "restricted"}}}})
+    state_store.update_state(
+        {
+            "slack": {
+                "channels": {
+                    "C1": {"metadata": {"name": "general"}},
+                    "C2": {"metadata": {"name": "restricted"}},
+                }
+            }
+        }
+    )
     processed = poller.run_once()
     assert processed == 0
     assert client.history_calls[0][0] == "C2"
