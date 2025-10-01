@@ -1,7 +1,7 @@
 """Operational helpers such as backup and restore of local state."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
 import tarfile
@@ -63,6 +63,31 @@ def restore_state_backup(
     return target_dir
 
 
+def prune_backup_archives(
+    directory: Path | str, retention_days: int
+) -> list[Path]:
+    """Remove backup archives older than the configured retention window."""
+
+    if retention_days < 0:
+        return []
+
+    folder = Path(directory)
+    if not folder.exists() or not folder.is_dir():
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    removed: list[Path] = []
+    for archive in sorted(folder.glob("graphiti-state-*.tar.gz")):
+        try:
+            modified = datetime.fromtimestamp(archive.stat().st_mtime, tz=timezone.utc)
+        except FileNotFoundError:  # pragma: no cover - race condition safety
+            continue
+        if modified < cutoff:
+            archive.unlink(missing_ok=True)
+            removed.append(archive)
+    return removed
+
+
 def _validated_members(members: Iterable[tarfile.TarInfo]) -> list[tarfile.TarInfo]:
     validated: list[tarfile.TarInfo] = []
     for member in members:
@@ -85,5 +110,9 @@ def _normalise_permissions(path: Path) -> None:
             continue
 
 
-__all__ = ["create_state_backup", "restore_state_backup"]
+__all__ = [
+    "create_state_backup",
+    "restore_state_backup",
+    "prune_backup_archives",
+]
 

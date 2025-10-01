@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 import os
 
+from .state import STATE_DIR_NAME
+
 
 DEFAULT_DOTENV_PATH = Path(".env")
 CONFIG_FILE_NAME = "config.json"
@@ -28,6 +30,18 @@ def _normalise_sequence(values: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(normalised)
 
 
+def _clean_optional_str(value: Any | None, default: str | None) -> str | None:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    return text
+
+
+DEFAULT_BACKUP_DIR = str((Path.home() / STATE_DIR_NAME / "backups").resolve())
+
+
 @dataclass(frozen=True)
 class GraphitiConfig:
     """Application configuration persisted to `config.json`."""
@@ -40,6 +54,10 @@ class GraphitiConfig:
     poll_slack_active_seconds: int = 30
     poll_slack_idle_seconds: int = 3600
     gmail_fallback_days: int = 7
+    gmail_backfill_days: int = 365
+    drive_backfill_days: int = 365
+    calendar_backfill_days: int = 365
+    slack_backfill_days: int = 365
     slack_channel_allowlist: tuple[str, ...] = ()
     calendar_ids: tuple[str, ...] = ("primary",)
     redaction_rules_path: str | None = None
@@ -48,6 +66,10 @@ class GraphitiConfig:
     summarization_threshold: int = 4000
     summarization_max_chars: int = 1200
     summarization_sentence_count: int = 5
+    backup_directory: str = DEFAULT_BACKUP_DIR
+    backup_retention_days: int = 14
+    log_retention_days: int = 30
+    logs_directory: str | None = None
 
     @classmethod
     def from_mapping(
@@ -86,6 +108,18 @@ class GraphitiConfig:
             gmail_fallback_days=get_int(
                 "GMAIL_FALLBACK_DAYS", defaults.gmail_fallback_days
             ),
+            gmail_backfill_days=get_int(
+                "GMAIL_BACKFILL_DAYS", defaults.gmail_backfill_days
+            ),
+            drive_backfill_days=get_int(
+                "DRIVE_BACKFILL_DAYS", defaults.drive_backfill_days
+            ),
+            calendar_backfill_days=get_int(
+                "CALENDAR_BACKFILL_DAYS", defaults.calendar_backfill_days
+            ),
+            slack_backfill_days=get_int(
+                "SLACK_BACKFILL_DAYS", defaults.slack_backfill_days
+            ),
             slack_channel_allowlist=_parse_csv(
                 values.get("SLACK_CHANNEL_ALLOWLIST"), defaults.slack_channel_allowlist
             ),
@@ -109,6 +143,19 @@ class GraphitiConfig:
             ),
             summarization_sentence_count=get_int(
                 "SUMMARY_SENTENCE_COUNT", defaults.summarization_sentence_count
+            ),
+            backup_directory=_clean_optional_str(
+                values.get("BACKUP_DIRECTORY"), defaults.backup_directory
+            )
+            or defaults.backup_directory,
+            backup_retention_days=get_int(
+                "BACKUP_RETENTION_DAYS", defaults.backup_retention_days
+            ),
+            log_retention_days=get_int(
+                "LOG_RETENTION_DAYS", defaults.log_retention_days
+            ),
+            logs_directory=_clean_optional_str(
+                values.get("LOGS_DIRECTORY"), defaults.logs_directory
             ),
         )
 
@@ -187,6 +234,18 @@ class GraphitiConfig:
             gmail_fallback_days=get_int(
                 "gmail_fallback_days", defaults.gmail_fallback_days
             ),
+            gmail_backfill_days=get_int(
+                "gmail_backfill_days", defaults.gmail_backfill_days
+            ),
+            drive_backfill_days=get_int(
+                "drive_backfill_days", defaults.drive_backfill_days
+            ),
+            calendar_backfill_days=get_int(
+                "calendar_backfill_days", defaults.calendar_backfill_days
+            ),
+            slack_backfill_days=get_int(
+                "slack_backfill_days", defaults.slack_backfill_days
+            ),
             slack_channel_allowlist=get_seq(
                 "slack_channel_allowlist", defaults.slack_channel_allowlist
             ),
@@ -208,6 +267,19 @@ class GraphitiConfig:
                 "summarization_sentence_count",
                 defaults.summarization_sentence_count,
             ),
+            backup_directory=_clean_optional_str(
+                values.get("backup_directory"), defaults.backup_directory
+            )
+            or defaults.backup_directory,
+            backup_retention_days=get_int(
+                "backup_retention_days", defaults.backup_retention_days
+            ),
+            log_retention_days=get_int(
+                "log_retention_days", defaults.log_retention_days
+            ),
+            logs_directory=_clean_optional_str(
+                values.get("logs_directory"), defaults.logs_directory
+            ),
         )
 
     def to_json(self) -> Dict[str, Any]:
@@ -218,6 +290,7 @@ class GraphitiConfig:
             {"pattern": pattern, "replacement": replacement}
             for pattern, replacement in self.redaction_rules
         ]
+        payload["logs_directory"] = self.logs_directory
         return payload
 
 
@@ -374,6 +447,10 @@ ENV_KEYS = {
     "POLL_SLACK_ACTIVE",
     "POLL_SLACK_IDLE",
     "GMAIL_FALLBACK_DAYS",
+    "GMAIL_BACKFILL_DAYS",
+    "DRIVE_BACKFILL_DAYS",
+    "CALENDAR_BACKFILL_DAYS",
+    "SLACK_BACKFILL_DAYS",
     "SLACK_CHANNEL_ALLOWLIST",
     "CALENDAR_IDS",
     "REDACTION_RULES_PATH",
@@ -382,6 +459,10 @@ ENV_KEYS = {
     "SUMMARY_THRESHOLD",
     "SUMMARY_MAX_CHARS",
     "SUMMARY_SENTENCE_COUNT",
+    "BACKUP_DIRECTORY",
+    "BACKUP_RETENTION_DAYS",
+    "LOG_RETENTION_DAYS",
+    "LOGS_DIRECTORY",
 }
 
 
