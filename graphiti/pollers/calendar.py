@@ -97,6 +97,12 @@ class CalendarPoller:
             "recurringEventId": event.get("recurringEventId"),
             "tombstone": status == "cancelled",
         }
+        location = event.get("location")
+        if location:
+            metadata["location"] = location
+        attendees = event.get("attendees")
+        if isinstance(attendees, list) and attendees:
+            metadata["attendees"] = attendees
         json_payload = dict(event)
         if status == "cancelled":
             json_payload = {"cancelled": True, "event": dict(event)}

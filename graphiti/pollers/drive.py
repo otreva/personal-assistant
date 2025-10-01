@@ -108,13 +108,20 @@ class DrivePoller:
 
         content = self._drive.fetch_file_content(file_id, file_metadata)
         text = content.text
+        revision_id = file_metadata.get("headRevisionId") or file_metadata.get("revisionId")
         metadata = {
             "file_id": file_id,
             "name": file_metadata.get("name"),
             "mimeType": file_metadata.get("mimeType"),
             "webViewLink": file_metadata.get("webViewLink"),
+            "url": file_metadata.get("webViewLink") or file_metadata.get("webContentLink"),
         }
         metadata.update({k: v for k, v in content.metadata.items()})
+        if revision_id and "revisionId" not in metadata:
+            metadata["revisionId"] = revision_id
+        owners = metadata.get("owners") or file_metadata.get("owners")
+        if owners is not None:
+            metadata["owners"] = owners
 
         return Episode(
             group_id=self._group_id,

@@ -165,7 +165,7 @@ def cmd_sync_slack(args: argparse.Namespace) -> int:
                 {
                     "slack": {
                         "channels": {
-                            str(c.get("id")): dict(c)
+                            str(c.get("id")): {"metadata": dict(c)}
                             for c in filtered
                             if isinstance(c, Mapping) and c.get("id")
                         },

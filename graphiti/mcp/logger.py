@@ -26,11 +26,13 @@ class McpTurn:
         metadata = dict(self.metadata)
         metadata.update({
             "conversation_id": self.conversation_id,
+            "thread_id": self.conversation_id,
             "role": self.role,
         })
         json_payload: MutableMapping[str, object] = {
             "message_id": self.message_id,
             "conversation_id": self.conversation_id,
+            "thread_id": self.conversation_id,
             "role": self.role,
             "timestamp": self.timestamp.isoformat(),
         }

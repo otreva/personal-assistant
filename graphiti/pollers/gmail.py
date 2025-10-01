@@ -114,11 +114,21 @@ class GmailPoller:
                         if isinstance(name, str) and isinstance(value, str):
                             headers[name.lower()] = value
 
+        from_addr = headers.get("from")
+        to_addr = headers.get("to")
+        message_id_header = headers.get("message-id")
+
         metadata = {
             "message_id": message_id,
             "thread_id": thread_id,
             "headers": headers,
         }
+        if from_addr:
+            metadata["from"] = from_addr
+        if to_addr:
+            metadata["to"] = to_addr
+        if message_id_header:
+            metadata["message_id_hdr"] = message_id_header
 
         return Episode(
             group_id=self._group_id,

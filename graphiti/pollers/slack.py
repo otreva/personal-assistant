@@ -70,25 +70,46 @@ class SlackPoller:
         if not channels:
             channels = self._inventory_channels()
 
-        channel_checkpoints = slack_state.get("checkpoints") if isinstance(slack_state, Mapping) else {}
-        if not isinstance(channel_checkpoints, Mapping):
-            channel_checkpoints = {}
-        thread_checkpoints = slack_state.get("threads") if isinstance(slack_state, Mapping) else {}
-        if not isinstance(thread_checkpoints, Mapping):
-            thread_checkpoints = {}
+        channel_last_seen: dict[str, str] = {}
+        for channel_id, entry in channels_state.items():
+            if not isinstance(entry, Mapping):
+                continue
+            last_seen = entry.get("last_seen_ts")
+            if last_seen is not None:
+                channel_last_seen[str(channel_id)] = str(last_seen)
+        checkpoints_state = slack_state.get("checkpoints") if isinstance(slack_state, Mapping) else {}
+        if isinstance(checkpoints_state, Mapping):
+            for channel_id, value in checkpoints_state.items():
+                if value is not None:
+                    channel_last_seen[str(channel_id)] = str(value)
+
+        threads_state = slack_state.get("threads") if isinstance(slack_state, Mapping) else {}
+        if not isinstance(threads_state, Mapping):
+            threads_state = {}
+        thread_checkpoints: dict[str, MutableMapping[str, str]] = {}
+        for channel_id, entries in threads_state.items():
+            if not isinstance(entries, Mapping):
+                continue
+            normalised: MutableMapping[str, str] = {}
+            for thread_ts, value in entries.items():
+                if isinstance(value, Mapping):
+                    last_seen = value.get("last_seen_ts")
+                else:
+                    last_seen = value
+                if last_seen is not None:
+                    normalised[str(thread_ts)] = str(last_seen)
+            thread_checkpoints[str(channel_id)] = normalised
 
         processed = 0
         updated_channels: dict[str, Mapping[str, object]] = {}
-        updated_checkpoints: dict[str, str] = {}
-        updated_threads: dict[str, MutableMapping[str, str]] = {
-            channel_id: dict(checks) if isinstance(checks, Mapping) else {}
+        updated_thread_checkpoints: dict[str, MutableMapping[str, str]] = {
+            channel_id: dict(checks)
             for channel_id, checks in thread_checkpoints.items()
-            if isinstance(channel_id, str)
         }
+        runtime_channel_last_seen = dict(channel_last_seen)
 
         for channel_id, metadata in channels.items():
-            updated_channels[channel_id] = metadata
-            oldest = str(channel_checkpoints.get(channel_id)) if channel_checkpoints.get(channel_id) else None
+            oldest = runtime_channel_last_seen.get(channel_id)
             messages = self._call_with_backoff(
                 self.client.fetch_channel_history, channel_id, oldest
             )
@@ -106,16 +127,30 @@ class SlackPoller:
                         channel_id,
                         metadata,
                         thread_ts,
-                        updated_threads,
+                        updated_thread_checkpoints,
                     )
             if channel_max_ts:
-                updated_checkpoints[channel_id] = channel_max_ts
+                runtime_channel_last_seen[channel_id] = channel_max_ts
+
+            entry: dict[str, object] = {"metadata": dict(metadata)}
+            last_seen_value = runtime_channel_last_seen.get(channel_id)
+            if last_seen_value:
+                entry["last_seen_ts"] = last_seen_value
+            updated_channels[channel_id] = entry
+
+        stored_threads = {
+            channel_id: {
+                thread_ts: {"last_seen_ts": ts}
+                for thread_ts, ts in threads.items()
+            }
+            for channel_id, threads in updated_thread_checkpoints.items()
+        }
 
         payload = {
             "slack": {
                 "channels": updated_channels,
-                "checkpoints": updated_checkpoints,
-                "threads": updated_threads,
+                "checkpoints": None,
+                "threads": stored_threads,
                 "last_run_at": datetime.now(timezone.utc).isoformat(),
             }
         }
@@ -139,13 +174,18 @@ class SlackPoller:
 
     def _resolve_channels(self, stored: Mapping[str, Mapping[str, object]]) -> dict[str, Mapping[str, object]]:
         channels: dict[str, Mapping[str, object]] = {}
-        for channel_id, metadata in stored.items():
-            if not isinstance(metadata, Mapping):
+        for channel_id, entry in stored.items():
+            if not isinstance(entry, Mapping):
                 continue
+            metadata_obj = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else entry
+            metadata = dict(metadata_obj)
+            if metadata is entry and "last_seen_ts" in metadata:
+                metadata = {k: v for k, v in metadata.items() if k != "last_seen_ts"}
+            metadata.setdefault("id", channel_id)
             name = str(metadata.get("name", ""))
-            if self._allowlist and not self._channel_allowed(channel_id, name):
+            if self._allowlist and not self._channel_allowed(str(channel_id), name):
                 continue
-            channels[str(channel_id)] = dict(metadata)
+            channels[str(channel_id)] = metadata
         return channels
 
     def _channel_allowed(self, channel_id: str, name: str) -> bool:
@@ -184,6 +224,7 @@ class SlackPoller:
             "user": user,
             "thread_ts": message.get("thread_ts"),
             "tombstone": False,
+            "permalink": message.get("permalink"),
         }
         return Episode(
             group_id=self._group_id,
