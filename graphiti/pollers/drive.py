@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
 from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
+from ..utils import sleep_with_jitter
 
 
 @dataclass(slots=True)
@@ -70,6 +71,55 @@ class DrivePoller:
             }
         )
         return processed
+
+    def backfill(self, newer_than_days: int | None = None) -> int:
+        """Fetch Drive changes in a historical window and ingest episodes."""
+
+        days = max(int(newer_than_days or self._config.drive_backfill_days), 1)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        processed = 0
+        page_token: str | None = None
+        guard = 0
+
+        while guard < 200:
+            guard += 1
+            result = self._backfill_page(page_token, days)
+            if not result.changes:
+                break
+            for change in result.changes:
+                episode = self._normalize_change(change)
+                if episode is None:
+                    continue
+                if episode.valid_at and episode.valid_at < cutoff:
+                    continue
+                self._episodes.upsert_episode(self._processor.process(episode))
+                processed += 1
+            next_token = result.new_page_token
+            if not next_token or next_token == page_token:
+                page_token = next_token
+                break
+            page_token = next_token
+            sleep_with_jitter(0.5, 0.3)
+
+        payload = {
+            "drive": {
+                "page_token": page_token,
+                "last_run_at": datetime.now(timezone.utc).isoformat(),
+                "backfilled_days": days,
+                "backfill_ran_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        self._state.update_state(payload)
+        return processed
+
+    def _backfill_page(self, page_token: str | None, days: int) -> DriveChangesResult:
+        fetcher = getattr(self._drive, "backfill_changes", None)
+        if callable(fetcher):
+            try:
+                return fetcher(days, page_token)
+            except TypeError:
+                return fetcher(days=days, page_token=page_token)
+        return self._drive.list_changes(page_token)
 
     def _normalize_change(self, change: Mapping[str, object]) -> Episode | None:
         file_id = change.get("fileId")

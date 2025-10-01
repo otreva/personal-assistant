@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, MutableMapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
 from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
+from ..utils import sleep_with_jitter
 
 
 class SlackRateLimited(Exception):
@@ -152,6 +153,79 @@ class SlackPoller:
                 "checkpoints": None,
                 "threads": stored_threads,
                 "last_run_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        self.state_store.update_state(payload)
+        return processed
+
+    def backfill(self, newer_than_days: int | None = None) -> int:
+        """Load historical Slack messages within the requested window."""
+
+        days = max(int(newer_than_days or self._config.slack_backfill_days), 1)
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
+        oldest_ts = f"{cutoff_dt.timestamp():.6f}"
+
+        state = self.state_store.load_state()
+        slack_state = state.get("slack") if isinstance(state, Mapping) else {}
+        channels_state = (
+            slack_state.get("channels") if isinstance(slack_state, Mapping) else {}
+        )
+        if not isinstance(channels_state, Mapping):
+            channels_state = {}
+
+        channels = self._resolve_channels(channels_state)
+        if not channels:
+            channels = self._inventory_channels()
+
+        processed = 0
+        updated_channels: dict[str, Mapping[str, object]] = {}
+        thread_checkpoints: dict[str, MutableMapping[str, str]] = {}
+
+        for channel_id, metadata in channels.items():
+            messages = self._call_with_backoff(
+                self.client.fetch_channel_history, channel_id, oldest_ts
+            )
+            channel_max_ts: str | None = None
+            for message in messages:
+                episode = self._normalize_message(channel_id, metadata, message)
+                if episode is None:
+                    continue
+                if episode.valid_at and episode.valid_at < cutoff_dt:
+                    continue
+                self.episode_store.upsert_episode(self._processor.process(episode))
+                processed += 1
+                channel_max_ts = self._max_ts(channel_max_ts, episode.version)
+                thread_ts = self._thread_ts(message)
+                if thread_ts and thread_ts != episode.version:
+                    channel_threads = thread_checkpoints.setdefault(channel_id, {})
+                    channel_threads.setdefault(thread_ts, oldest_ts)
+                    processed += self._process_thread(
+                        channel_id,
+                        metadata,
+                        thread_ts,
+                        thread_checkpoints,
+                    )
+            entry: dict[str, object] = {"metadata": dict(metadata)}
+            if channel_max_ts:
+                entry["last_seen_ts"] = channel_max_ts
+            updated_channels[channel_id] = entry
+            sleep_with_jitter(0.5, 0.3)
+
+        stored_threads = {
+            channel_id: {
+                thread_ts: {"last_seen_ts": ts}
+                for thread_ts, ts in threads.items()
+            }
+            for channel_id, threads in thread_checkpoints.items()
+        }
+
+        payload = {
+            "slack": {
+                "channels": updated_channels,
+                "threads": stored_threads,
+                "last_run_at": datetime.now(timezone.utc).isoformat(),
+                "backfilled_days": days,
+                "backfill_ran_at": datetime.now(timezone.utc).isoformat(),
             }
         }
         self.state_store.update_state(payload)

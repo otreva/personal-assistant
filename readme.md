@@ -11,9 +11,9 @@ The guide below walks a new operator through the entire setup — from installin
 3. Configure Graphiti through the web admin at <http://localhost:8000>.
 4. Create OAuth credentials for Google Workspace APIs and generate a user token for Slack.
 5. Store the tokens under `~/.graphiti_sync/` and confirm Graphiti can read them.
-6. Run the Gmail, Drive, Calendar, and Slack pollers once to seed the graph.
-7. Start the optional health endpoint or scheduler and monitor sync status.
-8. Back up the state directory regularly to protect checkpoints and credentials.
+6. Use the admin UI's manual loaders to backfill ~365 days of history for Gmail, Drive, Calendar, and Slack.
+7. Run the Gmail, Drive, Calendar, and Slack pollers once to confirm incremental sync.
+8. Let the built-in 02:00 EST backup job archive state (or trigger a manual backup from the UI) and monitor logs directly in the browser.
 
 Each step is detailed below.
 
@@ -61,8 +61,11 @@ Python dependencies into a cached Docker volume; subsequent runs reuse the cache
 Visit <http://localhost:8000> after starting the container. The admin UI detects existing
 settings from `~/.graphiti_sync/config.json` (created on first launch) and provides a dark
 mode/light mode aware form for editing them. Populate the Neo4j connection, polling
-intervals, and summarisation settings, then click **Save configuration**. The values are
-persisted back to `~/.graphiti_sync/config.json` with secure permissions.
+intervals, historical backfill defaults (365 days by default for each service), and
+summarisation settings. Configure the backup directory, retention window, and optional
+custom logs directory in the **Backups & Logging** section, then click **Save
+configuration**. The values are persisted back to `~/.graphiti_sync/config.json` with
+secure permissions.
 
 > **Note:** Environment variables and `.env` files are no longer required. The CLI and
 > pollers read directly from the JSON configuration managed by the admin UI. Environment
@@ -155,7 +158,14 @@ python -m graphiti.cli sync slack --list-channels
 
 The output is a JSON array of channels that Graphiti will poll. You can further restrict ingestion by setting `SLACK_CHANNEL_ALLOWLIST` in `.env` before running this command.
 
-### 9. Run the pollers to seed Graphiti
+### 9. Backfill the last year of history
+
+From the admin UI scroll to **Manual Historical Load** and run the Gmail, Drive,
+Calendar, and Slack backfills. The defaults load 365 days of activity and include
+rate-limit friendly pauses with jitter. You can rerun the loader at any time to fetch
+additional history without affecting incremental checkpoints.
+
+### 10. Run the pollers to seed Graphiti
 
 Execute each poller once to ingest the latest activity:
 
@@ -168,11 +178,11 @@ python -m graphiti.cli sync slack --once
 
 Each command prints a JSON summary including how many episodes were written and the execution timestamp. Rerun the commands whenever you need a manual refresh.
 
-### 10. (Optional) Log MCP / Cursor turns
+### 11. (Optional) Log MCP / Cursor turns
 
 Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging them through `graphiti.mcp.logger.McpEpisodeLogger`. The logger batches turns and writes them via the same episode pipeline used by the pollers.
 
-### 11. Monitor health and scheduling
+### 12. Monitor health and scheduling
 
 - **Status dashboard:**
   ```bash
@@ -196,8 +206,14 @@ Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging 
   python -m graphiti.cli sync scheduler --once
   ```
   This sequentially runs all pollers and prints aggregate metrics. Use the output to wire Graphiti into a `launchd` or cron job.
+- **Admin UI log viewer:** Open the **Logs** section in the web admin to stream the last *N* days of structured log entries (configurable via the Backups & Logging form).
 
-### 12. Back up and restore state
+### 13. Back up and restore state
+
+Graphiti automatically creates a timestamped `.tar.gz` backup of `~/.graphiti_sync/`
+every day at **02:00 EST**. Archives are written to the directory configured in the
+admin UI (default `~/.graphiti_sync/backups`) and older files are pruned according to the
+retention window. You can trigger an ad-hoc backup from the UI or via the CLI:
 
 Create a timestamped archive of `~/.graphiti_sync/`:
 
@@ -213,7 +229,7 @@ python -m graphiti.cli restore state ~/Backups/graphiti-state-YYYYMMDDHHMMSS.tar
 
 Run the relevant `sync ... --once` commands afterward to resume polling from the restored checkpoints.
 
-### 13. Validate with the acceptance harness (optional)
+### 14. Validate with the acceptance harness (optional)
 
 To execute the tests inside Docker without installing Python locally, run:
 

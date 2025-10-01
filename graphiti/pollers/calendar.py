@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
 from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
+from ..utils import sleep_with_jitter
 
 
 class CalendarSyncTokenExpired(Exception):
@@ -78,6 +80,37 @@ class CalendarPoller:
                 }
             }
         )
+        return processed
+
+    def backfill(self, newer_than_days: int | None = None) -> int:
+        """Run a full sync for the configured calendars within the provided window."""
+
+        days = max(int(newer_than_days or self._config.calendar_backfill_days), 1)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        processed = 0
+        new_tokens: dict[str, str] = {}
+
+        for calendar_id in self._calendar_ids:
+            page = self._client.full_sync(calendar_id)
+            for event in page.events:
+                episode = self._normalize_event(calendar_id, event)
+                if episode.valid_at and episode.valid_at < cutoff:
+                    continue
+                processed_episode = self._processor.process(episode)
+                self._episodes.upsert_episode(processed_episode)
+                processed += 1
+            new_tokens[calendar_id] = page.next_sync_token
+            sleep_with_jitter(0.4, 0.2)
+
+        payload = {
+            "calendar": {
+                "sync_tokens": new_tokens,
+                "last_run_at": datetime.now(timezone.utc).isoformat(),
+                "backfilled_days": days,
+                "backfill_ran_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        self._state.update_state(payload)
         return processed
 
     def _normalize_event(self, calendar_id: str, event: Mapping[str, object]) -> Episode:

@@ -24,8 +24,16 @@ def test_cli_status_outputs_json(monkeypatch, tmp_path, capsys):
                 poll_slack_active_seconds=30,
                 poll_slack_idle_seconds=3600,
                 gmail_fallback_days=7,
+                gmail_backfill_days=365,
+                drive_backfill_days=365,
+                calendar_backfill_days=365,
+                slack_backfill_days=365,
                 calendar_ids=("primary",),
                 slack_channel_allowlist=(),
+                backup_directory="/tmp/backups",
+                backup_retention_days=14,
+                log_retention_days=30,
+                logs_directory=None,
             )
         ),
     )

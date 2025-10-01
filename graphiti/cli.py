@@ -112,8 +112,16 @@ def cmd_status(_: argparse.Namespace) -> int:
             "poll_slack_active_seconds": config.poll_slack_active_seconds,
             "poll_slack_idle_seconds": config.poll_slack_idle_seconds,
             "gmail_fallback_days": config.gmail_fallback_days,
+            "gmail_backfill_days": config.gmail_backfill_days,
+            "drive_backfill_days": config.drive_backfill_days,
+            "calendar_backfill_days": config.calendar_backfill_days,
+            "slack_backfill_days": config.slack_backfill_days,
             "calendar_ids": list(config.calendar_ids),
             "slack_channel_allowlist": list(config.slack_channel_allowlist),
+            "backup_directory": config.backup_directory,
+            "backup_retention_days": config.backup_retention_days,
+            "log_retention_days": config.log_retention_days,
+            "logs_directory": config.logs_directory,
         },
         "state_directory": str(state.base_dir),
         "tokens_path_exists": state.tokens_path.exists(),
@@ -352,6 +360,13 @@ class _NoopGmailClient:
 @dataclass(slots=True)
 class _NoopDriveClient:
     def list_changes(self, page_token: str | None) -> Any:
+        from .pollers.drive import DriveChangesResult
+
+        return DriveChangesResult(changes=[], new_page_token=page_token or "noop")
+
+    def backfill_changes(
+        self, newer_than_days: int, page_token: str | None = None
+    ) -> Any:
         from .pollers.drive import DriveChangesResult
 
         return DriveChangesResult(changes=[], new_page_token=page_token or "noop")

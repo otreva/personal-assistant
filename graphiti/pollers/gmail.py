@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Mapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
 from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
+from ..utils import sleep_with_jitter
 
 
 class GmailHistoryNotFound(Exception):
@@ -81,6 +82,41 @@ class GmailPoller:
             }
         }
         self._state.update_state(update_payload)
+        return processed
+
+    def backfill(self, newer_than_days: int | None = None) -> int:
+        """Fetch messages from the fallback window and ingest recent episodes."""
+
+        days = max(int(newer_than_days or self._config.gmail_backfill_days), 1)
+        history = self._gmail.fallback_fetch(days)
+        processed = 0
+        seen: set[str] = set()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+        for index, message_id in enumerate(history.message_ids, start=1):
+            if message_id in seen:
+                continue
+            seen.add(message_id)
+            message = self._gmail.fetch_message(message_id)
+            episode = self._normalize_message(message)
+            if episode.valid_at and episode.valid_at < cutoff:
+                continue
+            processed_episode = self._processor.process(episode)
+            self._episodes.upsert_episode(processed_episode)
+            processed += 1
+            if index % 25 == 0:
+                sleep_with_jitter(0.4, 0.2)
+
+        payload = {
+            "gmail": {
+                "last_history_id": history.latest_history_id,
+                "last_run_at": datetime.now(timezone.utc).isoformat(),
+                "fallback_used": True,
+                "backfilled_days": days,
+                "backfill_ran_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        self._state.update_state(payload)
         return processed
 
     def _normalize_message(self, message: Mapping[str, object]) -> Episode:
