@@ -1,4 +1,4 @@
-"""Admin web application for configuring Graphiti."""
+"""Admin web application for configuring Personal Assistant."""
 
 from .app import create_app
 

@@ -1,4 +1,4 @@
-"""FastAPI application powering the Graphiti admin UI."""
+"""FastAPI application powering the Personal Assistant admin UI."""
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +17,13 @@ import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, validator
+
+try:  # pragma: no cover - optional dependency
+    import tkinter  # type: ignore
+    from tkinter import filedialog  # type: ignore
+except Exception:  # pragma: no cover - tkinter not available
+    tkinter = None  # type: ignore[assignment]
+    filedialog = None  # type: ignore[assignment]
 
 from ..cli import (
     close_episode_store,
@@ -208,7 +215,7 @@ class ConfigPayload(BaseModel):
     drive_backfill_days: int = Field(..., ge=1)
     calendar_backfill_days: int = Field(..., ge=1)
     slack_backfill_days: int = Field(..., ge=1)
-    slack_channel_allowlist: list[str] = Field(default_factory=list)
+    slack_search_query: str = Field("", min_length=0)
     calendar_ids: list[str] = Field(default_factory=lambda: ["primary"])
     redaction_rules_path: str | None = None
     redaction_rules: list[RedactionRule] = Field(default_factory=list)
@@ -221,7 +228,7 @@ class ConfigPayload(BaseModel):
     log_retention_days: int = Field(..., ge=0)
     logs_directory: str | None = None
 
-    @validator("slack_channel_allowlist", "calendar_ids", pre=True)
+    @validator("calendar_ids", pre=True)
     def _strip_items(cls, value: Any) -> list[str]:  # noqa: D401,N805
         """Ensure list-like inputs are converted to cleaned string lists."""
 
@@ -267,6 +274,11 @@ class SlackAuthPayload(BaseModel):
     user_token: str = Field("", min_length=0)
 
 
+class DirectoryRequest(BaseModel):
+    title: str | None = None
+    initial: str | None = None
+
+
 def create_app(config_path: Path | None = None) -> FastAPI:
     """Create a FastAPI application exposing the admin UI."""
 
@@ -281,7 +293,7 @@ def create_app(config_path: Path | None = None) -> FastAPI:
         log_store=log_store,
     )
 
-    app = FastAPI(title="Graphiti Admin", version="1.0.0")
+    app = FastAPI(title="Personal Assistant Admin", version="1.0.0")
 
     def _refresh_log_store(config: GraphitiConfig) -> None:
         nonlocal log_store
@@ -311,7 +323,6 @@ def create_app(config_path: Path | None = None) -> FastAPI:
                     client,
                     episode_store,
                     state_store,
-                    allowlist=config.slack_channel_allowlist,
                     config=config,
                 )
                 processed = await asyncio.to_thread(poller.backfill, days)
@@ -356,7 +367,6 @@ def create_app(config_path: Path | None = None) -> FastAPI:
                     client,
                     episode_store,
                     state_store,
-                    allowlist=config.slack_channel_allowlist,
                     config=config,
                 )
                 processed = await asyncio.to_thread(poller.run_once)
@@ -581,6 +591,36 @@ def create_app(config_path: Path | None = None) -> FastAPI:
         )
         return {"channels": channels}
 
+    @app.post("/api/dialog/directory")
+    async def choose_directory(payload: DirectoryRequest) -> dict[str, Any]:
+        if filedialog is None or tkinter is None:
+            raise HTTPException(status_code=501, detail="Directory picker unavailable")
+
+        def _select() -> str | None:
+            root = None
+            try:
+                root = tkinter.Tk()  # type: ignore[call-arg]
+                root.withdraw()
+                options: dict[str, Any] = {}
+                if payload.title:
+                    options["title"] = payload.title
+                initial = (payload.initial or "").strip()
+                if initial:
+                    options["initialdir"] = initial
+                path = filedialog.askdirectory(**options)  # type: ignore[misc]
+                return str(path) if path else None
+            except Exception as exc:  # pragma: no cover - GUI errors
+                raise RuntimeError(str(exc)) from exc
+            finally:
+                if root is not None:
+                    root.destroy()
+
+        try:
+            selection = await asyncio.to_thread(_select)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {"path": selection}
+
     @app.post("/api/manual-load/{source}")
     async def manual_load(source: str, payload: ManualLoadPayload) -> dict[str, Any]:
         return await _run_manual_load(source, payload.days)
@@ -630,7 +670,7 @@ def create_app(config_path: Path | None = None) -> FastAPI:
 
 
 def _render_index(payload: ConfigPayload) -> str:
-    allowlist = ", ".join(payload.slack_channel_allowlist)
+    search_query = payload.slack_search_query
     calendars = ", ".join(payload.calendar_ids)
     redaction_lines = "\n".join(
         f"{rule.pattern} => {rule.replacement}" for rule in payload.redaction_rules
@@ -640,7 +680,7 @@ def _render_index(payload: ConfigPayload) -> str:
 <head>
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>Graphiti Admin</title>
+  <title>Personal Assistant Admin</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -759,6 +799,39 @@ def _render_index(payload: ConfigPayload) -> str:
       display: grid;
       gap: 1.1rem;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .picker-row {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+    }
+    .picker-row input {
+      flex: 1 1 auto;
+    }
+    .path-button {
+      padding: 0.6rem 1.1rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+      transform: none;
+      box-shadow: none;
+    }
+    .path-button:hover {
+      background: var(--hover-bg);
+      color: var(--accent);
+      box-shadow: 0 6px 18px var(--shadow);
+      transform: none;
+    }
+    .path-button.secondary {
+      background: transparent;
+    }
+    .path-button.secondary:hover {
+      background: var(--hover-bg);
+      color: inherit;
     }
     .button-row {
       display: flex;
@@ -889,20 +962,20 @@ def _render_index(payload: ConfigPayload) -> str:
 </head>
 <body>
   <div class=\"layout\">
-    <nav class=\"sidebar\" role=\"tablist\" aria-label=\"Graphiti configuration sections\">
+    <nav class=\"sidebar\" role=\"tablist\" aria-label=\"Personal Assistant configuration sections\">
       <button class=\"tab-button active\" data-tab=\"connections\" aria-pressed=\"true\">Connections</button>
       <button class=\"tab-button\" data-tab=\"ingestion\" aria-pressed=\"false\">Ingestion</button>
       <button class=\"tab-button\" data-tab=\"operations\" aria-pressed=\"false\">Backups &amp; Logs</button>
     </nav>
     <main class=\"content\">
       <header>
-        <h1>Graphiti Admin</h1>
+        <h1>Personal Assistant Admin</h1>
         <p>Configure data sources, schedule ingestion, and monitor state without leaving your browser.</p>
       </header>
       <form id=\"config-form\" autocomplete=\"off\">
         <section class=\"card\" data-tab-panel=\"connections\">
           <h2>Neo4j Graph</h2>
-          <p class=\"hint\">Update the Neo4j connection credentials and the group identifier Graphiti uses for all episodes.</p>
+          <p class=\"hint\">Update the Neo4j connection credentials and the group identifier Personal Assistant uses for all episodes.</p>
           <div class=\"form-grid\">
             <label>URI<input type=\"text\" name=\"neo4j_uri\" required value=\"$neo4j_uri\" /></label>
             <label>User<input type=\"text\" name=\"neo4j_user\" required value=\"$neo4j_user\" /></label>
@@ -912,7 +985,7 @@ def _render_index(payload: ConfigPayload) -> str:
         </section>
         <section class=\"card\" data-tab-panel=\"connections\">
           <h2>Google Workspace OAuth</h2>
-          <p class=\"hint\">Store your OAuth client ID and secret from the Google Cloud Console, then authorise Graphiti with the required Gmail, Drive, and Calendar scopes.</p>
+          <p class=\"hint\">Store your OAuth client ID and secret from the Google Cloud Console, then authorise Personal Assistant with the required Gmail, Drive, and Calendar scopes.</p>
           <div class=\"form-grid\">
             <label>Client ID<input type=\"text\" name=\"google_client_id\" value=\"$google_client_id\" placeholder=\"xxxxxxxx.apps.googleusercontent.com\" /></label>
             <label>Client Secret<input type=\"password\" name=\"google_client_secret\" value=\"$google_client_secret\" autocomplete=\"new-password\" placeholder=\"Your OAuth secret\" /></label>
@@ -932,7 +1005,7 @@ def _render_index(payload: ConfigPayload) -> str:
             <label>Gmail Fallback (days)<input type=\"number\" min=\"1\" name=\"gmail_fallback_days\" value=\"$gmail_fallback_days\" required /></label>
           </div>
           <div class=\"form-grid\">
-            <label>Slack Channel Allowlist<input type=\"text\" name=\"slack_channel_allowlist\" placeholder=\"C1, C2, project\" value=\"$allowlist\" /></label>
+            <label>Slack Search Query<input type=\"text\" name=\"slack_search_query\" placeholder=\"in:general OR from:@user\" value=\"$slack_search_query\" /></label>
             <label>Calendar IDs<input type=\"text\" name=\"calendar_ids\" placeholder=\"primary, team@domain.com\" value=\"$calendars\" /></label>
           </div>
         </section>
@@ -959,10 +1032,21 @@ def _render_index(payload: ConfigPayload) -> str:
         <section class=\"card\" data-tab-panel=\"operations\">
           <h2>Backups &amp; Logging</h2>
           <div class=\"form-grid\">
-            <label>Backup Directory<input type=\"text\" name=\"backup_directory\" required value=\"$backup_directory\" /></label>
+            <label>Backup Directory
+              <div class=\"picker-row\">
+                <input type=\"text\" name=\"backup_directory\" required value=\"$backup_directory\" placeholder=\"Select a directory\" data-directory-input=\"backup_directory\" />
+                <button type=\"button\" class=\"path-button\" data-directory-target=\"backup_directory\">Choose…</button>
+              </div>
+            </label>
             <label>Backup Retention (days)<input type=\"number\" min=\"0\" name=\"backup_retention_days\" value=\"$backup_retention_days\" required /></label>
             <label>Log Retention (days)<input type=\"number\" min=\"0\" name=\"log_retention_days\" value=\"$log_retention_days\" required /></label>
-            <label>Logs Directory<input type=\"text\" name=\"logs_directory\" value=\"$logs_directory\" placeholder=\"Defaults to ~/.graphiti_sync/logs\" /></label>
+            <label>Logs Directory
+              <div class=\"picker-row\">
+                <input type=\"text\" name=\"logs_directory\" value=\"$logs_directory\" placeholder=\"Defaults to ~/.graphiti_sync/logs\" data-directory-input=\"logs_directory\" />
+                <button type=\"button\" class=\"path-button\" data-directory-target=\"logs_directory\">Choose…</button>
+                <button type=\"button\" class=\"path-button secondary\" data-directory-clear=\"logs_directory\">Clear</button>
+              </div>
+            </label>
           </div>
         </section>
         <div class=\"form-actions\">
@@ -1058,6 +1142,8 @@ def _render_index(payload: ConfigPayload) -> str:
       const logCategorySelect = document.getElementById('log-category');
       const logLimitInput = document.getElementById('log-limit');
       const logSinceInput = document.getElementById('log-since');
+      const directoryButtons = form.querySelectorAll('[data-directory-target]');
+      const clearDirectoryButtons = form.querySelectorAll('[data-directory-clear]');
       const googleStatus = document.getElementById('google-auth-status');
       const googleButton = document.getElementById('google-signin');
       const slackForm = document.getElementById('slack-form');
@@ -1113,6 +1199,51 @@ def _render_index(payload: ConfigPayload) -> str:
           })
           .filter((rule) => rule.pattern);
       };
+
+      const openDirectoryPicker = async (field) => {
+        const input = form.querySelector(`[data-directory-input="${field}"]`);
+        if (!input) return;
+        try {
+          const response = await fetch('/api/dialog/directory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: field === 'backup_directory' ? 'Select backup directory' : 'Select logs directory',
+              initial: input.value || undefined,
+            }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(data.detail || 'Directory picker unavailable.');
+          }
+          if (data.path) {
+            input.value = data.path;
+          }
+        } catch (error) {
+          if (statusEl && error instanceof Error) {
+            setStatus(statusEl, error.message, true);
+          }
+        }
+      };
+
+      directoryButtons.forEach((button) => {
+        button.addEventListener('click', async () => {
+          const field = button.dataset.directoryTarget;
+          if (!field) return;
+          await openDirectoryPicker(field);
+        });
+      });
+
+      clearDirectoryButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          const field = button.dataset.directoryClear;
+          if (!field) return;
+          const input = form.querySelector(`[data-directory-input="${field}"]`);
+          if (input) {
+            input.value = '';
+          }
+        });
+      });
 
       const populate = (config) => {
         Object.entries(config).forEach(([key, value]) => {
@@ -1206,7 +1337,7 @@ def _render_index(payload: ConfigPayload) -> str:
         payload.backup_retention_days = Number(payload.backup_retention_days || '0');
         payload.log_retention_days = Number(payload.log_retention_days || '0');
 
-        payload.slack_channel_allowlist = parseList(payload.slack_channel_allowlist || '');
+        payload.slack_search_query = (payload.slack_search_query || '').trim();
         payload.calendar_ids = parseList(payload.calendar_ids || '');
         payload.redaction_rules = parseRedaction(payload.redaction_rules || '');
 
@@ -1506,7 +1637,7 @@ def _render_index(payload: ConfigPayload) -> str:
         drive_backfill_days=payload.drive_backfill_days,
         calendar_backfill_days=payload.calendar_backfill_days,
         slack_backfill_days=payload.slack_backfill_days,
-        allowlist=escape(allowlist),
+        slack_search_query=escape(search_query),
         calendars=escape(calendars),
         summarization_strategy=escape(payload.summarization_strategy),
         summarization_threshold=payload.summarization_threshold,

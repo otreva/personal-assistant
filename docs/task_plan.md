@@ -1,4 +1,4 @@
-# Graphiti Implementation Task Plan
+# Personal Assistant Implementation Task Plan
 
 This plan decomposes the Graphiti PRD into tightly scoped engineering tasks that can be executed and tracked independently. Tasks are grouped by milestone and sequenced to minimize cross-component blocking. Each task includes a goal, key steps, completion criteria, and dependencies.
 
@@ -64,13 +64,13 @@ This plan decomposes the Graphiti PRD into tightly scoped engineering tasks that
 
 ## Milestone M1 — Slack Poller
 
-### 7. Slack Client & Channel Enumeration
-- **Goal:** Build Slack API wrapper for listing accessible channels/DMs per PRD Section 4.1.
+### 7. Slack Client & Search Support
+- **Goal:** Build Slack API wrapper for executing search queries per PRD Section 4.1.
 - **Steps:**
   1. Implement token-based authentication and rate-limit aware HTTP client.
-  2. Provide functions to list channels, DMs, MPIMs respecting optional allowlist config.
-  3. Persist discovered channel metadata in local state for reuse.
-- **Completion Criteria:** Tests simulate API responses and confirm allowlist filter. CLI `sync slack --list-channels` prints channel IDs.
+  2. Provide helpers for `search.messages` with pagination, timestamp filtering, and graceful handling of truncated results.
+  3. Persist discovered channel and user metadata in local state for reuse and caching.
+- **Completion Criteria:** Tests simulate search responses and confirm metadata caching. CLI `sync slack --list-channels` prints channel IDs.
 - **Dependencies:** Task 1.
 
 ### 8. Slack Message Poller with Thread Support

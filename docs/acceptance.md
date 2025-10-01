@@ -1,4 +1,4 @@
-# Graphiti Acceptance Harness
+# Personal Assistant Acceptance Harness
 
 The acceptance harness automates the 14-day ingestion scenario described in the PRD. It feeds synthetic data through every poller, flushes the MCP logger, and verifies that the resulting episodes cover all required sources.
 

@@ -1,4 +1,4 @@
-"""Command line interface for Graphiti."""
+"""Command line interface for the Personal Assistant."""
 from __future__ import annotations
 
 import argparse
@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Mapping
 
 from .config import GraphitiConfig, load_config
 from .episodes import Neo4jEpisodeStore
@@ -22,7 +22,7 @@ DEFAULT_INDENT = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="graphiti")
+    parser = argparse.ArgumentParser(prog="personal-assistant")
     sub = parser.add_subparsers(dest="command", required=True)
 
     status_parser = sub.add_parser(
@@ -117,7 +117,7 @@ def cmd_status(_: argparse.Namespace) -> int:
             "calendar_backfill_days": config.calendar_backfill_days,
             "slack_backfill_days": config.slack_backfill_days,
             "calendar_ids": list(config.calendar_ids),
-            "slack_channel_allowlist": list(config.slack_channel_allowlist),
+            "slack_search_query": config.slack_search_query,
             "backup_directory": config.backup_directory,
             "backup_retention_days": config.backup_retention_days,
             "log_retention_days": config.log_retention_days,
@@ -168,27 +168,25 @@ def cmd_sync_slack(args: argparse.Namespace) -> int:
     try:
         if getattr(args, "list_channels", False):
             channels = list(client.list_channels())
-            filtered = _filter_channels(channels, config.slack_channel_allowlist)
             state.update_state(
                 {
                     "slack": {
                         "channels": {
                             str(c.get("id")): {"metadata": dict(c)}
-                            for c in filtered
+                            for c in channels
                             if isinstance(c, Mapping) and c.get("id")
                         },
                         "last_inventory_at": datetime.now(timezone.utc).isoformat(),
                     }
                 }
             )
-            print(json.dumps(filtered, indent=DEFAULT_INDENT, sort_keys=True))
+            print(json.dumps(channels, indent=DEFAULT_INDENT, sort_keys=True))
             return 0
 
         poller = SlackPoller(
             client,
             episode_store,
             state,
-            allowlist=config.slack_channel_allowlist,
         )
         processed = poller.run_once()
         payload = {
@@ -229,7 +227,6 @@ def cmd_sync_scheduler(args: argparse.Namespace) -> int:
             slack_client,
             episode_store,
             state,
-            allowlist=config.slack_channel_allowlist,
         )
         metrics.append({"source": "slack", "processed": slack_poller.run_once()})
     finally:
@@ -262,24 +259,6 @@ def cmd_restore_state(args: argparse.Namespace) -> int:
     }
     print(json.dumps(payload, indent=DEFAULT_INDENT, sort_keys=True))
     return 0
-
-
-def _filter_channels(
-    channels: Iterable[Mapping[str, Any]],
-    allowlist: Iterable[str] | None,
-) -> list[Mapping[str, Any]]:
-    allow = {channel.lower() for channel in allowlist or ()}
-    if not allow:
-        return [dict(channel) for channel in channels]
-    filtered: list[Mapping[str, Any]] = []
-    for channel in channels:
-        channel_id = str(channel.get("id", "")).lower()
-        name = str(channel.get("name", "")).lower()
-        if channel_id in allow or name in allow:
-            filtered.append(dict(channel))
-    return filtered
-
-
 def create_episode_store(config: GraphitiConfig) -> Neo4jEpisodeStore:
     driver = create_neo4j_driver(config)
     return Neo4jEpisodeStore(driver, group_id=config.group_id)

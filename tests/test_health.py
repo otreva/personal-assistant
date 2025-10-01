@@ -52,7 +52,7 @@ def test_format_dashboard_outputs_table(tmp_path):
     config = GraphitiConfig(group_id="g")
     metrics = collect_health_metrics(store, config)
     output = format_dashboard(metrics)
-    assert "Graphiti Sync Status" in output
+    assert "Personal Assistant Sync Status" in output
     assert "slack" in output
 
 

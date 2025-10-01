@@ -4,13 +4,12 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Mapping, MutableMapping, Protocol
+from typing import Any, Iterable, Mapping, MutableMapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
 from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
-from ..utils import sleep_with_jitter
 
 
 class SlackRateLimited(Exception):
@@ -24,138 +23,79 @@ class SlackRateLimited(Exception):
 class SlackClient(Protocol):  # pragma: no cover - protocol definition
     def list_channels(self) -> Iterable[Mapping[str, object]]: ...
 
-    def fetch_channel_history(
-        self, channel_id: str, oldest_ts: str | None
-    ) -> Iterable[Mapping[str, object]]: ...
+    def search_messages(
+        self,
+        query: str,
+        *,
+        oldest: str | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, object]: ...
 
-    def fetch_thread_replies(
-        self, channel_id: str, thread_ts: str, oldest_ts: str | None
-    ) -> Iterable[Mapping[str, object]]: ...
+    def fetch_message(self, channel_id: str, ts: str) -> Mapping[str, object]: ...
+
+    def resolve_user(self, user_id: str) -> Mapping[str, object] | None: ...
+
+    def resolve_channel(self, channel_id: str) -> Mapping[str, object] | None: ...
 
 
 @dataclass(slots=True)
 class SlackPoller:
-    """Poll Slack conversations, capturing threads and messages."""
+    """Poll Slack conversations using the search API."""
 
     client: SlackClient
     episode_store: Neo4jEpisodeStore
     state_store: GraphitiStateStore
-    allowlist: Iterable[str] | None = None
     config: GraphitiConfig | None = None
     max_retries: int = 3
     _config: GraphitiConfig = field(init=False)
     _group_id: str = field(init=False)
-    _allowlist: set[str] = field(init=False)
     _processor: EpisodeProcessor = field(init=False)
+    _query: str = field(init=False)
 
     def __post_init__(self) -> None:
         self._config = self.config or load_config()
         if self.episode_store.group_id != self._config.group_id:
             raise ValueError("Episode store group_id does not match configuration group_id")
         self._group_id = self._config.group_id
-        allow = [item.lower() for item in self.allowlist or self._config.slack_channel_allowlist]
-        self._allowlist = set(allow)
         self._processor = EpisodeProcessor(self._config)
+        query = (self._config.slack_search_query or "*").strip()
+        self._query = query or "*"
 
     def run_once(self) -> int:
         state = self.state_store.load_state()
-        slack_state = state.get("slack") if isinstance(state, Mapping) else {}
+        slack_state = state.get("slack") if isinstance(state.get("slack"), Mapping) else {}
         if not isinstance(slack_state, Mapping):
             slack_state = {}
+        search_state = (
+            slack_state.get("search") if isinstance(slack_state.get("search"), Mapping) else {}
+        )
+        stored_query = (
+            str(search_state.get("query", "")).strip() if isinstance(search_state, Mapping) else ""
+        )
+        last_seen = search_state.get("last_seen_ts") if isinstance(search_state, Mapping) else None
+        if not isinstance(last_seen, str):
+            last_seen = None
+        if stored_query != self._query:
+            last_seen = None
 
-        channels_state = slack_state.get("channels") if isinstance(slack_state, Mapping) else {}
-        if not isinstance(channels_state, Mapping):
-            channels_state = {}
+        user_cache = self._load_user_cache(slack_state.get("users"))
+        channel_cache = self._load_channel_cache(slack_state.get("channels"))
 
-        channels = self._resolve_channels(channels_state)
-        if not channels:
-            channels = self._inventory_channels()
+        processed, newest_ts = self._process_search_results(
+            oldest=last_seen,
+            cutoff=None,
+            user_cache=user_cache,
+            channel_cache=channel_cache,
+            skip_until=last_seen,
+        )
 
-        channel_last_seen: dict[str, str] = {}
-        for channel_id, entry in channels_state.items():
-            if not isinstance(entry, Mapping):
-                continue
-            last_seen = entry.get("last_seen_ts")
-            if last_seen is not None:
-                channel_last_seen[str(channel_id)] = str(last_seen)
-        checkpoints_state = slack_state.get("checkpoints") if isinstance(slack_state, Mapping) else {}
-        if isinstance(checkpoints_state, Mapping):
-            for channel_id, value in checkpoints_state.items():
-                if value is not None:
-                    channel_last_seen[str(channel_id)] = str(value)
-
-        threads_state = slack_state.get("threads") if isinstance(slack_state, Mapping) else {}
-        if not isinstance(threads_state, Mapping):
-            threads_state = {}
-        thread_checkpoints: dict[str, MutableMapping[str, str]] = {}
-        for channel_id, entries in threads_state.items():
-            if not isinstance(entries, Mapping):
-                continue
-            normalised: MutableMapping[str, str] = {}
-            for thread_ts, value in entries.items():
-                if isinstance(value, Mapping):
-                    last_seen = value.get("last_seen_ts")
-                else:
-                    last_seen = value
-                if last_seen is not None:
-                    normalised[str(thread_ts)] = str(last_seen)
-            thread_checkpoints[str(channel_id)] = normalised
-
-        processed = 0
-        updated_channels: dict[str, Mapping[str, object]] = {}
-        updated_thread_checkpoints: dict[str, MutableMapping[str, str]] = {
-            channel_id: dict(checks)
-            for channel_id, checks in thread_checkpoints.items()
-        }
-        runtime_channel_last_seen = dict(channel_last_seen)
-
-        for channel_id, metadata in channels.items():
-            oldest = runtime_channel_last_seen.get(channel_id)
-            messages = self._call_with_backoff(
-                self.client.fetch_channel_history, channel_id, oldest
-            )
-            channel_max_ts = oldest
-            for message in messages:
-                episode = self._normalize_message(channel_id, metadata, message)
-                if episode is None:
-                    continue
-                self.episode_store.upsert_episode(self._processor.process(episode))
-                processed += 1
-                channel_max_ts = self._max_ts(channel_max_ts, episode.version)
-                thread_ts = self._thread_ts(message)
-                if thread_ts and thread_ts != episode.version:
-                    processed += self._process_thread(
-                        channel_id,
-                        metadata,
-                        thread_ts,
-                        updated_thread_checkpoints,
-                    )
-            if channel_max_ts:
-                runtime_channel_last_seen[channel_id] = channel_max_ts
-
-            entry: dict[str, object] = {"metadata": dict(metadata)}
-            last_seen_value = runtime_channel_last_seen.get(channel_id)
-            if last_seen_value:
-                entry["last_seen_ts"] = last_seen_value
-            updated_channels[channel_id] = entry
-
-        stored_threads = {
-            channel_id: {
-                thread_ts: {"last_seen_ts": ts}
-                for thread_ts, ts in threads.items()
-            }
-            for channel_id, threads in updated_thread_checkpoints.items()
-        }
-
-        payload = {
-            "slack": {
-                "channels": updated_channels,
-                "checkpoints": None,
-                "threads": stored_threads,
-                "last_run_at": datetime.now(timezone.utc).isoformat(),
-            }
-        }
-        self.state_store.update_state(payload)
+        payload = self._build_state_payload(
+            newest_ts,
+            user_cache,
+            channel_cache,
+            extra={"last_run_at": datetime.now(timezone.utc).isoformat()},
+        )
+        self.state_store.update_state({"slack": payload})
         return processed
 
     def backfill(self, newer_than_days: int | None = None) -> int:
@@ -166,193 +106,190 @@ class SlackPoller:
         oldest_ts = f"{cutoff_dt.timestamp():.6f}"
 
         state = self.state_store.load_state()
-        slack_state = state.get("slack") if isinstance(state, Mapping) else {}
-        channels_state = (
-            slack_state.get("channels") if isinstance(slack_state, Mapping) else {}
+        slack_state = state.get("slack") if isinstance(state.get("slack"), Mapping) else {}
+        if not isinstance(slack_state, Mapping):
+            slack_state = {}
+        search_state = (
+            slack_state.get("search") if isinstance(slack_state.get("search"), Mapping) else {}
         )
-        if not isinstance(channels_state, Mapping):
-            channels_state = {}
+        last_seen = search_state.get("last_seen_ts") if isinstance(search_state, Mapping) else None
+        if not isinstance(last_seen, str):
+            last_seen = None
 
-        channels = self._resolve_channels(channels_state)
-        if not channels:
-            channels = self._inventory_channels()
+        user_cache = self._load_user_cache(slack_state.get("users"))
+        channel_cache = self._load_channel_cache(slack_state.get("channels"))
 
-        processed = 0
-        updated_channels: dict[str, Mapping[str, object]] = {}
-        thread_checkpoints: dict[str, MutableMapping[str, str]] = {}
+        processed, newest_ts = self._process_search_results(
+            oldest=oldest_ts,
+            cutoff=cutoff_dt,
+            user_cache=user_cache,
+            channel_cache=channel_cache,
+            skip_until=None,
+        )
 
-        for channel_id, metadata in channels.items():
-            messages = self._call_with_backoff(
-                self.client.fetch_channel_history, channel_id, oldest_ts
-            )
-            channel_max_ts: str | None = None
-            for message in messages:
-                episode = self._normalize_message(channel_id, metadata, message)
-                if episode is None:
-                    continue
-                if episode.valid_at and episode.valid_at < cutoff_dt:
-                    continue
-                self.episode_store.upsert_episode(self._processor.process(episode))
-                processed += 1
-                channel_max_ts = self._max_ts(channel_max_ts, episode.version)
-                thread_ts = self._thread_ts(message)
-                if thread_ts and thread_ts != episode.version:
-                    channel_threads = thread_checkpoints.setdefault(channel_id, {})
-                    channel_threads.setdefault(thread_ts, oldest_ts)
-                    processed += self._process_thread(
-                        channel_id,
-                        metadata,
-                        thread_ts,
-                        thread_checkpoints,
-                    )
-            entry: dict[str, object] = {"metadata": dict(metadata)}
-            if channel_max_ts:
-                entry["last_seen_ts"] = channel_max_ts
-            updated_channels[channel_id] = entry
-            sleep_with_jitter(0.5, 0.3)
-
-        stored_threads = {
-            channel_id: {
-                thread_ts: {"last_seen_ts": ts}
-                for thread_ts, ts in threads.items()
-            }
-            for channel_id, threads in thread_checkpoints.items()
-        }
-
-        payload = {
-            "slack": {
-                "channels": updated_channels,
-                "threads": stored_threads,
+        combined_last_seen = self._max_ts(last_seen, newest_ts) if newest_ts else last_seen
+        payload = self._build_state_payload(
+            combined_last_seen,
+            user_cache,
+            channel_cache,
+            extra={
                 "last_run_at": datetime.now(timezone.utc).isoformat(),
                 "backfilled_days": days,
                 "backfill_ran_at": datetime.now(timezone.utc).isoformat(),
-            }
-        }
-        self.state_store.update_state(payload)
+            },
+        )
+        self.state_store.update_state({"slack": payload})
         return processed
 
-    def _inventory_channels(self) -> dict[str, Mapping[str, object]]:
-        channels = self.client.list_channels()
-        filtered = {}
-        for channel in channels:
-            if not isinstance(channel, Mapping):
-                continue
-            channel_id = str(channel.get("id"))
-            name = str(channel.get("name", ""))
-            if not channel_id:
-                continue
-            if self._allowlist and not self._channel_allowed(channel_id, name):
-                continue
-            filtered[channel_id] = dict(channel)
-        return filtered
-
-    def _resolve_channels(self, stored: Mapping[str, Mapping[str, object]]) -> dict[str, Mapping[str, object]]:
-        channels: dict[str, Mapping[str, object]] = {}
-        for channel_id, entry in stored.items():
-            if not isinstance(entry, Mapping):
-                continue
-            metadata_obj = entry.get("metadata") if isinstance(entry.get("metadata"), Mapping) else entry
-            metadata = dict(metadata_obj)
-            if metadata is entry and "last_seen_ts" in metadata:
-                metadata = {k: v for k, v in metadata.items() if k != "last_seen_ts"}
-            metadata.setdefault("id", channel_id)
-            name = str(metadata.get("name", ""))
-            if self._allowlist and not self._channel_allowed(str(channel_id), name):
-                continue
-            channels[str(channel_id)] = metadata
-        return channels
-
-    def _channel_allowed(self, channel_id: str, name: str) -> bool:
-        if not self._allowlist:
-            return True
-        return channel_id.lower() in self._allowlist or name.lower() in self._allowlist
-
-    def _normalize_message(
+    def _process_search_results(
         self,
-        channel_id: str,
-        metadata: Mapping[str, object],
-        message: Mapping[str, object],
-    ) -> Episode | None:
-        if not isinstance(message, Mapping):
-            return None
-        if message.get("type") not in {None, "message"}:
-            return None
-        subtype = message.get("subtype")
-        if isinstance(subtype, str) and subtype:
-            return None
-        ts = message.get("ts")
-        if not isinstance(ts, str) or not ts:
-            return None
-        user = message.get("user")
-        if not isinstance(user, str):
-            user = None
-        text = message.get("text")
-        if text is not None and not isinstance(text, str):
-            text = str(text)
-        valid_at = self._parse_ts(ts)
-        native_id = f"{channel_id}:{ts}"
-        json_payload = dict(message)
-        metadata_payload = {
-            "channel_id": channel_id,
-            "channel_name": metadata.get("name"),
-            "user": user,
-            "thread_ts": message.get("thread_ts"),
-            "tombstone": False,
-            "permalink": message.get("permalink"),
-        }
-        return Episode(
-            group_id=self._group_id,
-            source="slack",
-            native_id=native_id,
-            version=ts,
-            valid_at=valid_at,
-            text=text,
-            json=json_payload,
-            metadata=metadata_payload,
-        )
-
-    def _process_thread(
-        self,
-        channel_id: str,
-        metadata: Mapping[str, object],
-        thread_ts: str,
-        thread_checkpoints: MutableMapping[str, MutableMapping[str, str]],
-    ) -> int:
-        channel_threads = thread_checkpoints.setdefault(channel_id, {})
-        oldest = channel_threads.get(thread_ts)
-        replies = self._call_with_backoff(
-            self.client.fetch_thread_replies, channel_id, thread_ts, oldest
-        )
+        *,
+        oldest: str | None,
+        cutoff: datetime | None,
+        user_cache: MutableMapping[str, dict[str, str]],
+        channel_cache: MutableMapping[str, dict[str, str]],
+        skip_until: str | None,
+    ) -> tuple[int, str | None]:
         processed = 0
-        thread_max_ts = oldest
-        for reply in replies:
-            if not isinstance(reply, Mapping):
-                continue
-            ts = reply.get("ts")
-            if not isinstance(ts, str) or ts == thread_ts:
-                continue
-            episode = self._normalize_message(channel_id, metadata, reply)
+        newest_ts = skip_until
+        for payload in self._search_messages(oldest):
+            episode = self._normalise_message(payload, user_cache, channel_cache)
             if episode is None:
+                continue
+            if skip_until and not self._is_newer(episode.version, skip_until):
+                continue
+            if cutoff and episode.valid_at and episode.valid_at < cutoff:
                 continue
             self.episode_store.upsert_episode(self._processor.process(episode))
             processed += 1
-            thread_max_ts = self._max_ts(thread_max_ts, episode.version)
-        if thread_max_ts:
-            channel_threads[thread_ts] = thread_max_ts
-        return processed
+            newest_ts = self._max_ts(newest_ts, episode.version)
+        return processed, newest_ts
 
-    def _call_with_backoff(self, func, *args):
+    def _search_messages(self, oldest: str | None) -> Iterable[Mapping[str, object]]:
+        cursor: str | None = None
+        while True:
+            page = self._call_with_backoff(
+                self.client.search_messages,
+                self._query,
+                oldest=oldest,
+                cursor=cursor,
+            )
+            if not isinstance(page, Mapping):
+                break
+            messages = page.get("messages")
+            if not isinstance(messages, Iterable):
+                messages = []
+            for message in messages:
+                if isinstance(message, Mapping):
+                    yield message
+            cursor_value = page.get("next_cursor")
+            cursor = str(cursor_value) if isinstance(cursor_value, str) and cursor_value else None
+            if not cursor:
+                break
+
+    def _normalise_message(
+        self,
+        payload: Mapping[str, object],
+        user_cache: MutableMapping[str, dict[str, str]],
+        channel_cache: MutableMapping[str, dict[str, str]],
+    ) -> Episode | None:
+        ts = payload.get("ts")
+        if not isinstance(ts, str) or not ts.strip():
+            return None
+        ts = ts.strip()
+        channel_id = self._channel_id(payload)
+        if not channel_id:
+            return None
+
+        full_payload = dict(payload)
+        if bool(payload.get("is_truncated")):
+            extra = self._call_with_backoff(self.client.fetch_message, channel_id, ts)
+            if isinstance(extra, Mapping):
+                full_payload.update(extra)
+
+        user_id = self._user_id(full_payload)
+        user_info = self._resolve_user(user_id, user_cache) if user_id else None
+        channel_info = self._resolve_channel(channel_id, channel_cache, full_payload.get("channel"))
+
+        text = full_payload.get("text")
+        if text is not None and not isinstance(text, str):
+            text = str(text)
+        if isinstance(text, str):
+            stripped = text.strip()
+            text = text if stripped else stripped
+
+        metadata: dict[str, Any] = {
+            "channel_id": channel_id,
+            "channel_name": channel_info.get("name") if channel_info else None,
+            "user_id": user_id,
+            "user_name": user_info.get("name") if user_info else None,
+            "user_email": user_info.get("email") if user_info else None,
+            "thread_ts": self._thread_ts(full_payload),
+            "permalink": full_payload.get("permalink"),
+        }
+        metadata = {key: value for key, value in metadata.items() if value}
+
+        return Episode(
+            group_id=self._group_id,
+            source="slack",
+            native_id=f"{channel_id}:{ts}",
+            version=ts,
+            valid_at=self._parse_ts(ts),
+            text=text,
+            json=full_payload,
+            metadata=metadata,
+        )
+
+    def _resolve_user(
+        self,
+        user_id: str,
+        cache: MutableMapping[str, dict[str, str]],
+    ) -> dict[str, str]:
+        if user_id in cache:
+            return cache[user_id]
+        response = self._call_with_backoff(self.client.resolve_user, user_id)
+        record: dict[str, str] = {"id": user_id}
+        if isinstance(response, Mapping):
+            name = self._extract_name(response)
+            if name:
+                record["name"] = name
+            email = response.get("email")
+            if isinstance(email, str) and email.strip():
+                record["email"] = email.strip()
+        cache[user_id] = record
+        return record
+
+    def _resolve_channel(
+        self,
+        channel_id: str,
+        cache: MutableMapping[str, dict[str, str]],
+        initial: object,
+    ) -> dict[str, str]:
+        if channel_id in cache:
+            return cache[channel_id]
+        record: dict[str, str] = {"id": channel_id}
+        if isinstance(initial, Mapping):
+            name = initial.get("name")
+            if isinstance(name, str) and name.strip():
+                record["name"] = name.strip()
+        response = self._call_with_backoff(self.client.resolve_channel, channel_id)
+        if isinstance(response, Mapping):
+            name = response.get("name")
+            if isinstance(name, str) and name.strip():
+                record["name"] = name.strip()
+        cache[channel_id] = record
+        return record
+
+    def _call_with_backoff(self, func, *args, **kwargs):
         delay = 1.0
-        for attempt in range(self.max_retries):
+        for _ in range(self.max_retries):
             try:
-                result = func(*args)
-                return list(result)
+                return func(*args, **kwargs)
             except SlackRateLimited as exc:
                 sleep_for = max(delay, exc.retry_after)
                 time.sleep(sleep_for)
                 delay = min(sleep_for * 2, 60.0)
-        result = func(*args)
-        return list(result)
+        return func(*args, **kwargs)
 
     @staticmethod
     def _parse_ts(ts: str) -> datetime:
@@ -378,6 +315,100 @@ class SlackPoller:
         except ValueError:  # pragma: no cover - defensive
             return candidate
 
+    @staticmethod
+    def _is_newer(candidate: str, reference: str) -> bool:
+        try:
+            return float(candidate) > float(reference)
+        except ValueError:
+            return candidate > reference
+
+    @staticmethod
+    def _channel_id(payload: Mapping[str, object]) -> str | None:
+        channel = payload.get("channel")
+        if isinstance(channel, Mapping):
+            candidate = channel.get("id") or channel.get("channel")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        fallback = payload.get("channel_id") or payload.get("channel")
+        if isinstance(fallback, str) and fallback.strip():
+            return fallback.strip()
+        return None
+
+    @staticmethod
+    def _user_id(payload: Mapping[str, object]) -> str | None:
+        candidate = payload.get("user") or payload.get("user_id")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        return None
+
+    @staticmethod
+    def _extract_name(payload: Mapping[str, object]) -> str | None:
+        for key in ("name", "real_name", "display_name"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _load_user_cache(value: object) -> dict[str, dict[str, str]]:
+        cache: dict[str, dict[str, str]] = {}
+        if not isinstance(value, Mapping):
+            return cache
+        for key, entry in value.items():
+            if not isinstance(entry, Mapping):
+                continue
+            record: dict[str, str] = {"id": str(entry.get("id", key))}
+            name = entry.get("name")
+            if isinstance(name, str) and name.strip():
+                record["name"] = name.strip()
+            email = entry.get("email")
+            if isinstance(email, str) and email.strip():
+                record["email"] = email.strip()
+            cache[str(key)] = record
+        return cache
+
+    @staticmethod
+    def _load_channel_cache(value: object) -> dict[str, dict[str, str]]:
+        cache: dict[str, dict[str, str]] = {}
+        if not isinstance(value, Mapping):
+            return cache
+        for key, entry in value.items():
+            metadata: Mapping[str, object] | None = None
+            if isinstance(entry, Mapping):
+                if isinstance(entry.get("metadata"), Mapping):
+                    metadata = entry.get("metadata")  # type: ignore[assignment]
+                else:
+                    metadata = entry
+            if metadata is None:
+                continue
+            record: dict[str, str] = {"id": str(metadata.get("id", key))}
+            name = metadata.get("name")
+            if isinstance(name, str) and name.strip():
+                record["name"] = name.strip()
+            cache[str(key)] = record
+        return cache
+
+    def _build_state_payload(
+        self,
+        newest_ts: str | None,
+        user_cache: Mapping[str, dict[str, str]],
+        channel_cache: Mapping[str, dict[str, str]],
+        *,
+        extra: Mapping[str, object] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "search": {"query": self._query},
+            "users": {key: dict(value) for key, value in user_cache.items()},
+            "channels": {key: dict(value) for key, value in channel_cache.items()},
+            "checkpoints": None,
+            "threads": None,
+        }
+        if newest_ts:
+            payload["search"]["last_seen_ts"] = newest_ts
+        if extra:
+            payload.update(extra)
+        return payload
+
 
 @dataclass(slots=True)
 class NullSlackClient:
@@ -388,15 +419,23 @@ class NullSlackClient:
     def list_channels(self) -> Iterable[Mapping[str, object]]:
         return list(self.channels)
 
-    def fetch_channel_history(
-        self, channel_id: str, oldest_ts: str | None
-    ) -> Iterable[Mapping[str, object]]:
-        return []
+    def search_messages(
+        self,
+        query: str,
+        *,
+        oldest: str | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, object]:
+        return {"messages": [], "next_cursor": None}
 
-    def fetch_thread_replies(
-        self, channel_id: str, thread_ts: str, oldest_ts: str | None
-    ) -> Iterable[Mapping[str, object]]:
-        return []
+    def fetch_message(self, channel_id: str, ts: str) -> Mapping[str, object]:
+        return {}
+
+    def resolve_user(self, user_id: str) -> Mapping[str, object] | None:
+        return None
+
+    def resolve_channel(self, channel_id: str) -> Mapping[str, object] | None:
+        return None
 
 
 __all__ = [
@@ -405,4 +444,3 @@ __all__ = [
     "SlackRateLimited",
     "NullSlackClient",
 ]
-

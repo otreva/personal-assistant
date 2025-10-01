@@ -3,8 +3,8 @@ set -euo pipefail
 
 IMAGE="python:3.12-slim"
 APP_DIR="/app"
-STATE_VOLUME="graphiti_state"
-CACHE_VOLUME="graphiti_pip_cache"
+STATE_VOLUME="personal_assistant_state"
+CACHE_VOLUME="personal_assistant_pip_cache"
 PORT="8000"
 
 if ! command -v docker >/dev/null 2>&1; then
