@@ -49,6 +49,8 @@ class GraphitiConfig:
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "password"
+    google_client_id: str = ""
+    google_client_secret: str = ""
     group_id: str = "mike_assistant"
     poll_gmail_drive_calendar_seconds: int = 3600
     poll_slack_active_seconds: int = 30
@@ -95,6 +97,10 @@ class GraphitiConfig:
             neo4j_uri=values.get("NEO4J_URI", defaults.neo4j_uri),
             neo4j_user=values.get("NEO4J_USER", defaults.neo4j_user),
             neo4j_password=values.get("NEO4J_PASS", defaults.neo4j_password),
+            google_client_id=values.get("GOOGLE_CLIENT_ID", defaults.google_client_id),
+            google_client_secret=values.get(
+                "GOOGLE_CLIENT_SECRET", defaults.google_client_secret
+            ),
             group_id=values.get("GROUP_ID", defaults.group_id),
             poll_gmail_drive_calendar_seconds=get_int(
                 "POLL_GMAIL_DRIVE_CAL", defaults.poll_gmail_drive_calendar_seconds
@@ -220,6 +226,10 @@ class GraphitiConfig:
             neo4j_uri=get_str("neo4j_uri", defaults.neo4j_uri),
             neo4j_user=get_str("neo4j_user", defaults.neo4j_user),
             neo4j_password=get_str("neo4j_password", defaults.neo4j_password),
+            google_client_id=get_str("google_client_id", defaults.google_client_id),
+            google_client_secret=get_str(
+                "google_client_secret", defaults.google_client_secret
+            ),
             group_id=get_str("group_id", defaults.group_id),
             poll_gmail_drive_calendar_seconds=get_int(
                 "poll_gmail_drive_calendar_seconds",
