@@ -37,7 +37,7 @@ launchd scheduling and day-two operations.
 
 ## 3. Configure Personal Assistant
 
-1. Visit <http://localhost:8000> after the container starts. The UI loads existing settings from `~/.graphiti_sync/config.json`
+1. Visit <http://localhost:8128> after the container starts. The UI loads existing settings from `~/.graphiti_sync/config.json`
    and displays them in grouped sections.
 2. Populate Neo4j credentials, polling cadences, backfill defaults, and summarisation options.
 3. Use the **Backups & Logging** controls to select paths via the OS-native directory picker. Both the backup directory and the
