@@ -8,7 +8,7 @@ The guide below walks a new operator through the entire setup — from installin
 
 1. Install Docker Desktop or another Docker runtime.
 2. Clone the repository and start the bundled admin UI via Docker (no local Python needed).
-3. Configure Personal Assistant through the web admin at <http://localhost:8000>.
+3. Configure Personal Assistant through the web admin at <http://localhost:8128>.
 4. Create OAuth credentials for Google Workspace APIs and generate a user token for Slack.
 5. Store the tokens under `~/.graphiti_sync/` and confirm Personal Assistant can read them.
 6. Use the admin UI's manual loaders to backfill ~365 days of history for Gmail, Drive, Calendar, and Slack.
@@ -48,7 +48,7 @@ database. No local Python environment is required.
   docker compose up
   ```
 
-  This command starts the admin UI on <http://localhost:8000> and exposes Neo4j on
+  This command starts the admin UI on <http://localhost:8128> and exposes Neo4j on
   <bolt://localhost:7687>. Press `Ctrl+C` to stop the stack and rerun the command to
   resume from the persisted volumes.
 
@@ -61,12 +61,12 @@ database. No local Python environment is required.
   The script is handy for quick checks but does not manage Neo4j or reuse cached
   dependencies between invocations.
 
-Both approaches expose the admin UI on <http://localhost:8000>. The first compose run
+Both approaches expose the admin UI on <http://localhost:8128>. The first compose run
 builds the Python environment; subsequent runs reuse the cached volume for faster starts.
 
 ### 3. Configure Personal Assistant from the web admin
 
-Visit <http://localhost:8000> after starting the container. The admin UI detects existing
+Visit <http://localhost:8128> after starting the container. The admin UI detects existing
 settings from `~/.graphiti_sync/config.json` (created on first launch) and provides a dark
 mode/light mode aware form for editing them. Populate the Neo4j connection, polling
 intervals, historical backfill defaults (365 days by default for each service), and

@@ -5,7 +5,7 @@ IMAGE="python:3.12-slim"
 APP_DIR="/app"
 STATE_VOLUME="personal_assistant_state"
 CACHE_VOLUME="personal_assistant_pip_cache"
-PORT="8000"
+PORT="8128"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run this script" >&2

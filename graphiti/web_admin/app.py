@@ -175,20 +175,20 @@ def _oauth_result_page(success: bool, message: str) -> str:
       }}
     </style>
     <script>
-      window.addEventListener('load', () => {{
-        try {{
-          if (window.opener && typeof window.opener.postMessage === 'function') {{
-            window.opener.postMessage({{
+      window.addEventListener('load', () => {
+        try {
+          if (window.opener && typeof window.opener.postMessage === 'function') {
+            window.opener.postMessage({
               type: 'google-oauth',
               status: '{status}',
               message: '{safe_message}',
-            }}, '*');
-          }}
-        }} catch (error) {{
+            }, '*');
+          }
+        } catch (error) {
           console.warn('Unable to notify parent window', error);
-        }}
+        }
         setTimeout(() => window.close(), 500);
-      }});
+      });
     </script>
   </head>
   <body>
@@ -964,99 +964,80 @@ def _render_index(payload: ConfigPayload) -> str:
   <div class=\"layout\">
     <nav class=\"sidebar\" role=\"tablist\" aria-label=\"Personal Assistant configuration sections\">
       <button class=\"tab-button active\" data-tab=\"connections\" aria-pressed=\"true\">Connections</button>
-      <button class=\"tab-button\" data-tab=\"ingestion\" aria-pressed=\"false\">Ingestion</button>
-      <button class=\"tab-button\" data-tab=\"operations\" aria-pressed=\"false\">Backups &amp; Logs</button>
+      <button class=\"tab-button\" data-tab=\"google\" aria-pressed=\"false\">Google Workspace</button>
+      <button class=\"tab-button\" data-tab=\"slack\" aria-pressed=\"false\">Slack</button>
+      <button class=\"tab-button\" data-tab=\"redaction\" aria-pressed=\"false\">Redaction &amp; Summaries</button>
+      <button class=\"tab-button\" data-tab=\"backups\" aria-pressed=\"false\">Backups</button>
+      <button class=\"tab-button\" data-tab=\"logs\" aria-pressed=\"false\">Logs</button>
+      <button class=\"tab-button\" data-tab=\"operations\" aria-pressed=\"false\">Operations</button>
     </nav>
     <main class=\"content\">
       <header>
         <h1>Personal Assistant Admin</h1>
         <p>Configure data sources, schedule ingestion, and monitor state without leaving your browser.</p>
       </header>
-      <form id=\"config-form\" autocomplete=\"off\">
-        <section class=\"card\" data-tab-panel=\"connections\">
-          <h2>Neo4j Graph</h2>
-          <p class=\"hint\">Update the Neo4j connection credentials and the group identifier Personal Assistant uses for all episodes.</p>
+
+      <section class=\"card\" data-tab-panel=\"connections\">
+        <h2>Neo4j Graph</h2>
+        <p class=\"hint\">Update the Neo4j connection credentials and the group identifier Personal Assistant uses for all episodes.</p>
+        <form id=\"connections-form\" data-config-form autocomplete=\"off\">
           <div class=\"form-grid\">
             <label>URI<input type=\"text\" name=\"neo4j_uri\" required value=\"$neo4j_uri\" /></label>
             <label>User<input type=\"text\" name=\"neo4j_user\" required value=\"$neo4j_user\" /></label>
             <label>Password<input type=\"password\" name=\"neo4j_password\" required value=\"$neo4j_password\" autocomplete=\"current-password\" /></label>
             <label>Group ID<input type=\"text\" name=\"group_id\" required value=\"$group_id\" /></label>
           </div>
-        </section>
-        <section class=\"card\" data-tab-panel=\"connections\">
-          <h2>Google Workspace OAuth</h2>
-          <p class=\"hint\">Store your OAuth client ID and secret from the Google Cloud Console, then authorise Personal Assistant with the required Gmail, Drive, and Calendar scopes.</p>
+          <div class=\"form-actions\">
+            <button type=\"submit\">Save connections</button>
+            <div class=\"status-line\" id=\"connections-status\" data-default-status></div>
+          </div>
+        </form>
+      </section>
+
+      <section class=\"card\" data-tab-panel=\"google\">
+        <h2>Google Workspace</h2>
+        <p class=\"hint\">Configure OAuth credentials, polling intervals, and calendar defaults for Gmail, Drive, and Calendar.</p>
+        <form id=\"google-config-form\" data-config-form autocomplete=\"off\">
           <div class=\"form-grid\">
             <label>Client ID<input type=\"text\" name=\"google_client_id\" value=\"$google_client_id\" placeholder=\"xxxxxxxx.apps.googleusercontent.com\" /></label>
             <label>Client Secret<input type=\"password\" name=\"google_client_secret\" value=\"$google_client_secret\" autocomplete=\"new-password\" placeholder=\"Your OAuth secret\" /></label>
+            <label>Gmail/Drive/Calendar Interval (seconds)<input type=\"number\" min=\"1\" name=\"poll_gmail_drive_calendar_seconds\" value=\"$poll_gmail_drive_calendar_seconds\" required /></label>
+            <label>Gmail Fallback (days)<input type=\"number\" min=\"1\" name=\"gmail_fallback_days\" value=\"$gmail_fallback_days\" required /></label>
+            <label>Calendar IDs<input type=\"text\" name=\"calendar_ids\" placeholder=\"primary, team@domain.com\" value=\"$calendars\" /></label>
+          </div>
+          <div class=\"form-grid\">
+            <label>Gmail Backfill (days)<input type=\"number\" min=\"1\" name=\"gmail_backfill_days\" value=\"$gmail_backfill_days\" required /></label>
+            <label>Drive Backfill (days)<input type=\"number\" min=\"1\" name=\"drive_backfill_days\" value=\"$drive_backfill_days\" required /></label>
+            <label>Calendar Backfill (days)<input type=\"number\" min=\"1\" name=\"calendar_backfill_days\" value=\"$calendar_backfill_days\" required /></label>
           </div>
           <div class=\"button-row\">
             <button type=\"button\" id=\"google-signin\">Sign in with Google</button>
             <span class=\"badge\">Scopes: gmail, drive, calendar</span>
           </div>
           <div class=\"status-line\" id=\"google-auth-status\"></div>
-        </section>
-        <section class=\"card\" data-tab-panel=\"ingestion\">
-          <h2>Polling Behaviour</h2>
+          <div class=\"form-actions\">
+            <button type=\"submit\">Save Google settings</button>
+            <div class=\"status-line\" id=\"google-config-status\"></div>
+          </div>
+        </form>
+      </section>
+
+      <section class=\"card\" data-tab-panel=\"slack\">
+        <h2>Slack Workspace</h2>
+        <p class=\"hint\">Tune polling behaviour for Slack and manage workspace credentials.</p>
+        <form id=\"slack-settings-form\" data-config-form autocomplete=\"off\">
           <div class=\"form-grid\">
-            <label>Gmail/Drive/Calendar Interval (seconds)<input type=\"number\" min=\"1\" name=\"poll_gmail_drive_calendar_seconds\" value=\"$poll_gmail_drive_calendar_seconds\" required /></label>
             <label>Slack Active Interval (seconds)<input type=\"number\" min=\"1\" name=\"poll_slack_active_seconds\" value=\"$poll_slack_active_seconds\" required /></label>
             <label>Slack Idle Interval (seconds)<input type=\"number\" min=\"1\" name=\"poll_slack_idle_seconds\" value=\"$poll_slack_idle_seconds\" required /></label>
-            <label>Gmail Fallback (days)<input type=\"number\" min=\"1\" name=\"gmail_fallback_days\" value=\"$gmail_fallback_days\" required /></label>
-          </div>
-          <div class=\"form-grid\">
-            <label>Slack Search Query<input type=\"text\" name=\"slack_search_query\" placeholder=\"in:general OR from:@user\" value=\"$slack_search_query\" /></label>
-            <label>Calendar IDs<input type=\"text\" name=\"calendar_ids\" placeholder=\"primary, team@domain.com\" value=\"$calendars\" /></label>
-          </div>
-        </section>
-        <section class=\"card\" data-tab-panel=\"ingestion\">
-          <h2>Historical Import Defaults</h2>
-          <div class=\"form-grid\">
-            <label>Gmail Backfill (days)<input type=\"number\" min=\"1\" name=\"gmail_backfill_days\" value=\"$gmail_backfill_days\" required /></label>
-            <label>Drive Backfill (days)<input type=\"number\" min=\"1\" name=\"drive_backfill_days\" value=\"$drive_backfill_days\" required /></label>
-            <label>Calendar Backfill (days)<input type=\"number\" min=\"1\" name=\"calendar_backfill_days\" value=\"$calendar_backfill_days\" required /></label>
             <label>Slack Backfill (days)<input type=\"number\" min=\"1\" name=\"slack_backfill_days\" value=\"$slack_backfill_days\" required /></label>
+            <label>Slack Search Query<input type=\"text\" name=\"slack_search_query\" placeholder=\"in:general OR from:@user\" value=\"$slack_search_query\" /></label>
           </div>
-        </section>
-        <section class=\"card\" data-tab-panel=\"ingestion\">
-          <h2>Summaries &amp; Redaction</h2>
-          <div class=\"form-grid\">
-            <label>Strategy<input type=\"text\" name=\"summarization_strategy\" value=\"$summarization_strategy\" required /></label>
-            <label>Threshold (characters)<input type=\"number\" min=\"1\" name=\"summarization_threshold\" value=\"$summarization_threshold\" required /></label>
-            <label>Max Summary Length<input type=\"number\" min=\"1\" name=\"summarization_max_chars\" value=\"$summarization_max_chars\" required /></label>
-            <label>Sentence Count<input type=\"number\" min=\"1\" name=\"summarization_sentence_count\" value=\"$summarization_sentence_count\" required /></label>
-            <label>Redaction Rules Path<input type=\"text\" name=\"redaction_rules_path\" value=\"$redaction_rules_path\" placeholder=\"Optional JSON file\" /></label>
+          <div class=\"form-actions\">
+            <button type=\"submit\">Save Slack settings</button>
+            <div class=\"status-line\" id=\"slack-config-status\"></div>
           </div>
-          <label>Inline Redaction Rules<textarea name=\"redaction_rules\" placeholder=\"sensitive@example.com =&gt; [REDACTED]\">$redaction_lines</textarea></label>
-        </section>
-        <section class=\"card\" data-tab-panel=\"operations\">
-          <h2>Backups &amp; Logging</h2>
-          <div class=\"form-grid\">
-            <label>Backup Directory
-              <div class=\"picker-row\">
-                <input type=\"text\" name=\"backup_directory\" required value=\"$backup_directory\" placeholder=\"Select a directory\" data-directory-input=\"backup_directory\" />
-                <button type=\"button\" class=\"path-button\" data-directory-target=\"backup_directory\">Choose…</button>
-              </div>
-            </label>
-            <label>Backup Retention (days)<input type=\"number\" min=\"0\" name=\"backup_retention_days\" value=\"$backup_retention_days\" required /></label>
-            <label>Log Retention (days)<input type=\"number\" min=\"0\" name=\"log_retention_days\" value=\"$log_retention_days\" required /></label>
-            <label>Logs Directory
-              <div class=\"picker-row\">
-                <input type=\"text\" name=\"logs_directory\" value=\"$logs_directory\" placeholder=\"Defaults to ~/.graphiti_sync/logs\" data-directory-input=\"logs_directory\" />
-                <button type=\"button\" class=\"path-button\" data-directory-target=\"logs_directory\">Choose…</button>
-                <button type=\"button\" class=\"path-button secondary\" data-directory-clear=\"logs_directory\">Clear</button>
-              </div>
-            </label>
-          </div>
-        </section>
-        <div class=\"form-actions\">
-          <button type=\"submit\">Save configuration</button>
-          <div class=\"status-line\" id=\"config-status\"></div>
-        </div>
-      </form>
-
-      <section class=\"card\" data-tab-panel=\"connections\">
-        <h2>Slack Workspace</h2>
+        </form>
+        <h3>Slack Credentials</h3>
         <p class=\"hint\">Paste a Slack user token with the required read scopes and optionally label the workspace for quick reference.</p>
         <form id=\"slack-form\" class=\"form-grid\">
           <label>Workspace Label<input type=\"text\" id=\"slack-workspace\" placeholder=\"acme-corp\" /></label>
@@ -1071,7 +1052,83 @@ def _render_index(payload: ConfigPayload) -> str:
         <div id=\"slack-channels\"></div>
       </section>
 
-      <section class=\"card\" data-tab-panel=\"ingestion\">
+      <section class=\"card\" data-tab-panel=\"redaction\">
+        <h2>Summaries &amp; Redaction</h2>
+        <form id=\"redaction-form\" data-config-form autocomplete=\"off\">
+          <div class=\"form-grid\">
+            <label>Strategy<input type=\"text\" name=\"summarization_strategy\" value=\"$summarization_strategy\" required /></label>
+            <label>Threshold (characters)<input type=\"number\" min=\"1\" name=\"summarization_threshold\" value=\"$summarization_threshold\" required /></label>
+            <label>Max Summary Length<input type=\"number\" min=\"1\" name=\"summarization_max_chars\" value=\"$summarization_max_chars\" required /></label>
+            <label>Sentence Count<input type=\"number\" min=\"1\" name=\"summarization_sentence_count\" value=\"$summarization_sentence_count\" required /></label>
+            <label>Redaction Rules Path<input type=\"text\" name=\"redaction_rules_path\" value=\"$redaction_rules_path\" placeholder=\"Optional JSON file\" /></label>
+          </div>
+          <label>Inline Redaction Rules<textarea name=\"redaction_rules\" placeholder=\"sensitive@example.com =&gt; [REDACTED]\">$redaction_lines</textarea></label>
+          <div class=\"form-actions\">
+            <button type=\"submit\">Save redaction settings</button>
+            <div class=\"status-line\" id=\"redaction-status\"></div>
+          </div>
+        </form>
+      </section>
+
+      <section class=\"card\" data-tab-panel=\"backups\">
+        <h2>Backups</h2>
+        <form id=\"backups-form\" data-config-form autocomplete=\"off\">
+          <div class=\"form-grid\">
+            <label>Backup Directory
+              <div class=\"picker-row\">
+                <input type=\"text\" name=\"backup_directory\" required value=\"$backup_directory\" placeholder=\"Select a directory\" data-directory-input=\"backup_directory\" />
+                <button type=\"button\" class=\"path-button\" data-directory-target=\"backup_directory\">Choose…</button>
+              </div>
+            </label>
+            <label>Backup Retention (days)<input type=\"number\" min=\"0\" name=\"backup_retention_days\" value=\"$backup_retention_days\" required /></label>
+          </div>
+          <div class=\"form-actions\">
+            <button type=\"submit\">Save backup settings</button>
+            <div class=\"status-line\" id=\"backups-status\"></div>
+          </div>
+        </form>
+        <h3>Manual Backup</h3>
+        <p class=\"hint\">Create a timestamped archive of the state directory immediately.</p>
+        <div class=\"button-row\">
+          <button type=\"button\" id=\"run-backup\">Run Backup</button>
+        </div>
+        <div class=\"status-line\" id=\"backup-status\"></div>
+      </section>
+
+      <section class=\"card\" data-tab-panel=\"logs\">
+        <h2>Logs</h2>
+        <form id=\"logs-form\" data-config-form autocomplete=\"off\">
+          <div class=\"form-grid\">
+            <label>Log Retention (days)<input type=\"number\" min=\"0\" name=\"log_retention_days\" value=\"$log_retention_days\" required /></label>
+            <label>Logs Directory
+              <div class=\"picker-row\">
+                <input type=\"text\" name=\"logs_directory\" value=\"$logs_directory\" placeholder=\"Defaults to ~/.graphiti_sync/logs\" data-directory-input=\"logs_directory\" />
+                <button type=\"button\" class=\"path-button\" data-directory-target=\"logs_directory\">Choose…</button>
+                <button type=\"button\" class=\"path-button secondary\" data-directory-clear=\"logs_directory\">Clear</button>
+              </div>
+            </label>
+          </div>
+          <div class=\"form-actions\">
+            <button type=\"submit\">Save log settings</button>
+            <div class=\"status-line\" id=\"logs-config-status\"></div>
+          </div>
+        </form>
+        <div class=\"log-controls\">
+          <label>Category
+            <select id=\"log-category\">
+              <option value=\"system\">system</option>
+              <option value=\"episodes\">episodes</option>
+            </select>
+          </label>
+          <label>Limit<input type=\"number\" id=\"log-limit\" value=\"200\" min=\"1\" /></label>
+          <label>Since (days)<input type=\"number\" id=\"log-since\" value=\"0\" min=\"0\" /></label>
+          <button type=\"button\" id=\"refresh-logs\">Refresh</button>
+        </div>
+        <div class=\"status-line\" id=\"logs-status\"></div>
+        <pre class=\"logs\" id=\"logs\"></pre>
+      </section>
+
+      <section class=\"card\" data-tab-panel=\"operations\">
         <h2>Manual Historical Load</h2>
         <p class=\"hint\">Run backfills for each service. Override the default number of days before launching.</p>
         <div class=\"manual-grid\">
@@ -1089,7 +1146,7 @@ def _render_index(payload: ConfigPayload) -> str:
         <div class=\"status-line\" id=\"loader-status\"></div>
       </section>
 
-      <section class=\"card\" data-tab-panel=\"ingestion\">
+      <section class=\"card\" data-tab-panel=\"operations\">
         <h2>Run Pollers Once</h2>
         <p class=\"hint\">Trigger an incremental sync for each connector to verify live ingestion.</p>
         <div class=\"button-row\">
@@ -1100,50 +1157,15 @@ def _render_index(payload: ConfigPayload) -> str:
         </div>
         <div class=\"status-line\" id=\"poller-status\"></div>
       </section>
-
-      <section class=\"card\" data-tab-panel=\"operations\">
-        <h2>Backups</h2>
-        <p class=\"hint\">Create a timestamped archive of the state directory immediately.</p>
-        <div class=\"button-row\">
-          <button type=\"button\" id=\"run-backup\">Run Backup</button>
-        </div>
-        <div class=\"status-line\" id=\"backup-status\"></div>
-      </section>
-
-      <section class=\"card\" data-tab-panel=\"operations\">
-        <h2>Logs</h2>
-        <div class=\"log-controls\">
-          <label>Category
-            <select id=\"log-category\">
-              <option value=\"system\">system</option>
-              <option value=\"episodes\">episodes</option>
-            </select>
-          </label>
-          <label>Limit<input type=\"number\" id=\"log-limit\" value=\"200\" min=\"1\" /></label>
-          <label>Since (days)<input type=\"number\" id=\"log-since\" value=\"0\" min=\"0\" /></label>
-          <button type=\"button\" id=\"refresh-logs\">Refresh</button>
-        </div>
-        <div class=\"status-line\" id=\"logs-status\"></div>
-        <pre class=\"logs\" id=\"logs\"></pre>
-      </section>
     </main>
   </div>
   <script>
     (function () {
       const tabButtons = document.querySelectorAll('.tab-button');
       const panels = document.querySelectorAll('[data-tab-panel]');
-      const form = document.getElementById('config-form');
-      const statusEl = document.getElementById('config-status');
-      const backupStatus = document.getElementById('backup-status');
-      const loaderStatus = document.getElementById('loader-status');
-      const pollerStatus = document.getElementById('poller-status');
-      const logsStatus = document.getElementById('logs-status');
-      const logContainer = document.getElementById('logs');
-      const logCategorySelect = document.getElementById('log-category');
-      const logLimitInput = document.getElementById('log-limit');
-      const logSinceInput = document.getElementById('log-since');
-      const directoryButtons = form.querySelectorAll('[data-directory-target]');
-      const clearDirectoryButtons = form.querySelectorAll('[data-directory-clear]');
+      const configForms = document.querySelectorAll('[data-config-form]');
+      const directoryButtons = document.querySelectorAll('[data-directory-target]');
+      const clearDirectoryButtons = document.querySelectorAll('[data-directory-clear]');
       const googleStatus = document.getElementById('google-auth-status');
       const googleButton = document.getElementById('google-signin');
       const slackForm = document.getElementById('slack-form');
@@ -1153,16 +1175,29 @@ def _render_index(payload: ConfigPayload) -> str:
       const slackInventoryButton = document.getElementById('slack-inventory');
       const slackInventoryStatus = document.getElementById('slack-inventory-status');
       const slackChannels = document.getElementById('slack-channels');
+      const backupStatus = document.getElementById('backup-status');
+      const loaderStatus = document.getElementById('loader-status');
+      const pollerStatus = document.getElementById('poller-status');
+      const logsStatus = document.getElementById('logs-status');
+      const logContainer = document.getElementById('logs');
+      const logCategorySelect = document.getElementById('log-category');
+      const logLimitInput = document.getElementById('log-limit');
+      const logSinceInput = document.getElementById('log-since');
+      const defaultStatus = document.querySelector('[data-default-status]');
+      let currentConfig = {};
 
       const setStatus = (element, message, isError = false) => {
         if (!element) return;
-        element.textContent = message || '';
-        if (!message) {
+        const text = message || '';
+        element.textContent = text;
+        if (!text) {
           element.classList.remove('error');
           return;
         }
         element.classList.toggle('error', Boolean(isError));
       };
+
+      const getStatusTarget = (form) => form?.querySelector('.status-line') || defaultStatus;
 
       const activateTab = (name) => {
         tabButtons.forEach((button) => {
@@ -1200,9 +1235,241 @@ def _render_index(payload: ConfigPayload) -> str:
           .filter((rule) => rule.pattern);
       };
 
-      const openDirectoryPicker = async (field) => {
-        const input = form.querySelector(`[data-directory-input="${field}"]`);
+      const getFieldNodes = (name) =>
+        Array.from(document.querySelectorAll(`[name="$$${name}"]`));
+
+      const populateFields = (config) => {
+        Object.entries(config || {}).forEach(([key, value]) => {
+          const fields = getFieldNodes(key);
+          if (!fields.length) return;
+          fields.forEach((field) => {
+            if (Array.isArray(value)) {
+              if (key === 'redaction_rules') {
+                field.value = value
+                  .map((rule) => `$$${rule.pattern} => $$${rule.replacement}`)
+                  .join('\n');
+              } else {
+                field.value = value.join(', ');
+              }
+            } else if (value === null || value === undefined) {
+              field.value = '';
+            } else {
+              field.value = value;
+            }
+          });
+        });
+
+        [
+          ['gmail', 'gmail_backfill_days'],
+          ['drive', 'drive_backfill_days'],
+          ['calendar', 'calendar_backfill_days'],
+          ['slack', 'slack_backfill_days'],
+        ].forEach(([service, key]) => {
+          if (!(key in (config || {}))) return;
+          const input = document.querySelector(`[name="$$${service}_manual_days"]`);
+          if (input) {
+            const value = config[key];
+            input.dataset.default = String(value ?? '');
+            input.value = String(value ?? '');
+          }
+        });
+      };
+
+      const loadConfig = async () => {
+        const response = await fetch('/api/config');
+        if (!response.ok) {
+          throw new Error('Unable to load configuration');
+        }
+        const data = await response.json();
+        currentConfig = data;
+        populateFields(data);
+      };
+
+      const transformValue = (key, raw) => {
+        const text = typeof raw === 'string' ? raw : '';
+        switch (key) {
+          case 'poll_gmail_drive_calendar_seconds':
+          case 'poll_slack_active_seconds':
+          case 'poll_slack_idle_seconds':
+          case 'gmail_fallback_days':
+          case 'gmail_backfill_days':
+          case 'drive_backfill_days':
+          case 'calendar_backfill_days':
+          case 'slack_backfill_days':
+          case 'summarization_threshold':
+          case 'summarization_max_chars':
+          case 'summarization_sentence_count':
+          case 'backup_retention_days':
+          case 'log_retention_days':
+            return Number(text || '0');
+          case 'calendar_ids':
+            return parseList(text);
+          case 'redaction_rules':
+            return parseRedaction(text);
+          case 'slack_search_query':
+            return text.trim();
+          case 'neo4j_uri':
+          case 'neo4j_user':
+          case 'neo4j_password':
+          case 'group_id':
+          case 'google_client_id':
+          case 'google_client_secret':
+          case 'backup_directory':
+          case 'logs_directory':
+          case 'redaction_rules_path':
+            return text.trim();
+          default:
+            return text;
+        }
+      };
+
+      const loadGoogleStatus = async () => {
+        if (!googleStatus) return;
+        try {
+          const response = await fetch('/api/auth/google/status');
+          if (!response.ok) {
+            throw new Error('Unable to load Google status');
+          }
+          const data = await response.json();
+          if (!data.has_client || !data.has_secret) {
+            setStatus(googleStatus, 'Add your Google OAuth client ID and secret, then click “Sign in with Google”.', true);
+            return;
+          }
+          if (data.has_refresh_token) {
+            const scopes = Array.isArray(data.scopes) ? data.scopes.join(', ') : 'gmail, drive, calendar';
+            const updated = data.updated_at ? `Last updated $$${new Date(data.updated_at).toLocaleString()}.` : '';
+            setStatus(googleStatus, `Authorised with scopes: $$${scopes}. $$${updated}`.trim());
+          } else {
+            setStatus(googleStatus, 'Client saved. Click “Sign in with Google” to authorise access.');
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error || 'Unable to load Google status');
+          setStatus(googleStatus, message, true);
+        }
+      };
+
+      const loadSlackStatus = async () => {
+        if (!slackStatus || !slackForm) return;
+        try {
+          const response = await fetch('/api/auth/slack');
+          if (!response.ok) {
+            throw new Error('Unable to load Slack status');
+          }
+          const data = await response.json();
+          slackWorkspace.value = data.workspace || '';
+          slackToken.value = '';
+          if (data.has_token) {
+            const updated = data.updated_at ? `Saved $$${new Date(data.updated_at).toLocaleString()}.` : '';
+            const workspace = data.workspace ? `for $$${data.workspace}` : '';
+            setStatus(slackStatus, `Slack credentials $$${workspace} stored. $$${updated}`.trim());
+          } else {
+            setStatus(slackStatus, 'Add a Slack user token and click “Save Slack Credentials”.', true);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error || 'Unable to load Slack status');
+          setStatus(slackStatus, message, true);
+        }
+      };
+
+      const loadLogCategories = async () => {
+        try {
+          const response = await fetch('/api/logs/categories');
+          if (!response.ok) {
+            throw new Error('Unable to load log categories');
+          }
+          const data = await response.json();
+          const categories = data.categories || ['system', 'episodes'];
+          const current = logCategorySelect.value;
+          logCategorySelect.innerHTML = '';
+          categories.forEach((category) => {
+            const option = document.createElement('option');
+            option.value = category;
+            option.textContent = category;
+            if (category === current) option.selected = true;
+            logCategorySelect.appendChild(option);
+          });
+        } catch (error) {
+          logCategorySelect.innerHTML = '<option value="system">system</option>';
+          throw error;
+        }
+      };
+
+      const refreshLogs = async () => {
+        setStatus(logsStatus, 'Loading logs...');
+        try {
+          const params = new URLSearchParams();
+          const category = logCategorySelect.value || 'system';
+          params.set('category', category);
+          const limit = Number(logLimitInput.value || '200');
+          params.set('limit', String(Math.max(1, Math.floor(limit))));
+          const since = Number(logSinceInput.value || '0');
+          if (Number.isFinite(since) && since > 0) {
+            params.set('since_days', String(Math.floor(since)));
+          }
+          const response = await fetch(`/api/logs?$$${params.toString()}`);
+          if (!response.ok) {
+            throw new Error('Unable to fetch logs');
+          }
+          const data = await response.json();
+          const entries = Array.isArray(data.records) ? data.records : [];
+          logContainer.textContent = entries.length
+            ? entries.map((record) => JSON.stringify(record)).join('\n')
+            : 'No log entries available.';
+          setStatus(logsStatus, `Loaded $$${entries.length} log entries.`);
+        } catch (error) {
+          logContainer.textContent = '';
+          const message = error instanceof Error ? error.message : String(error || 'Unable to fetch logs');
+          setStatus(logsStatus, message, true);
+        }
+      };
+
+      const handleConfigSubmit = (form) => async (event) => {
+        event.preventDefault();
+        const statusEl = getStatusTarget(form);
+        const submitButton = form.querySelector('button[type="submit"]');
+        const formData = new FormData(form);
+        const updates = {};
+        formData.forEach((value, key) => {
+          updates[key] = transformValue(key, value);
+        });
+
+        try {
+          if (submitButton) submitButton.disabled = true;
+          setStatus(statusEl, 'Saving settings...');
+          const payload = { ...currentConfig, ...updates };
+          const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            const detail = await response.json().catch(() => ({}));
+            throw new Error(detail.detail || 'Unable to save configuration');
+          }
+          const data = await response.json();
+          currentConfig = data;
+          populateFields(data);
+          setStatus(statusEl, 'Settings saved successfully.');
+          if (googleStatus) {
+            await loadGoogleStatus().catch(() => {});
+          }
+          await loadLogCategories().catch(() => {});
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error || 'Unable to save configuration');
+          setStatus(statusEl, message, true);
+        } finally {
+          if (submitButton) submitButton.disabled = false;
+        }
+      };
+
+      configForms.forEach((form) => {
+        form.addEventListener('submit', handleConfigSubmit(form));
+      });
+
+      const openDirectoryPicker = async (field, form) => {
+        const input = document.querySelector(`[data-directory-input="${field}"]`);
         if (!input) return;
+        const statusEl = getStatusTarget(form);
         try {
           const response = await fetch('/api/dialog/directory', {
             method: 'POST',
@@ -1220,9 +1487,8 @@ def _render_index(payload: ConfigPayload) -> str:
             input.value = data.path;
           }
         } catch (error) {
-          if (statusEl && error instanceof Error) {
-            setStatus(statusEl, error.message, true);
-          }
+          const message = error instanceof Error ? error.message : String(error || 'Directory picker unavailable.');
+          setStatus(statusEl, message, true);
         }
       };
 
@@ -1230,7 +1496,7 @@ def _render_index(payload: ConfigPayload) -> str:
         button.addEventListener('click', async () => {
           const field = button.dataset.directoryTarget;
           if (!field) return;
-          await openDirectoryPicker(field);
+          await openDirectoryPicker(field, button.closest('form'));
         });
       });
 
@@ -1238,132 +1504,12 @@ def _render_index(payload: ConfigPayload) -> str:
         button.addEventListener('click', () => {
           const field = button.dataset.directoryClear;
           if (!field) return;
-          const input = form.querySelector(`[data-directory-input="${field}"]`);
+          const input = document.querySelector(`[data-directory-input="${field}"]`);
           if (input) {
             input.value = '';
           }
         });
       });
-
-      const populate = (config) => {
-        Object.entries(config).forEach(([key, value]) => {
-          const field = form.querySelector(`[name="$${key}"]`);
-          if (!field) return;
-          if (Array.isArray(value)) {
-            if (key === 'redaction_rules') {
-              field.value = value.map((rule) => `$${rule.pattern} => $${rule.replacement}`).join('\n');
-            } else {
-              field.value = value.join(', ');
-            }
-          } else if (value === null || value === undefined) {
-            field.value = '';
-          } else {
-            field.value = value;
-          }
-        });
-      };
-
-      const loadConfig = async () => {
-        const response = await fetch('/api/config');
-        if (!response.ok) {
-          throw new Error('Unable to load configuration');
-        }
-        const data = await response.json();
-        populate(data);
-      };
-
-      const loadGoogleStatus = async () => {
-        if (!googleStatus) return;
-        try {
-          const response = await fetch('/api/auth/google/status');
-          if (!response.ok) {
-            throw new Error('Unable to load Google status');
-          }
-          const data = await response.json();
-          if (!data.has_client || !data.has_secret) {
-            setStatus(googleStatus, 'Add your Google OAuth client ID and secret, then click “Sign in with Google”.', true);
-            return;
-          }
-          if (data.has_refresh_token) {
-            const scopes = Array.isArray(data.scopes) ? data.scopes.join(', ') : 'gmail, drive, calendar';
-            const updated = data.updated_at ? `Last updated $${new Date(data.updated_at).toLocaleString()}.` : '';
-            setStatus(googleStatus, `Authorised with scopes: $${scopes}. $${updated}`.trim());
-          } else {
-            setStatus(googleStatus, 'Client saved. Click “Sign in with Google” to authorise access.');
-          }
-        } catch (error) {
-          setStatus(googleStatus, error.message, true);
-        }
-      };
-
-      const loadSlackStatus = async () => {
-        if (!slackStatus || !slackForm) return;
-        try {
-          const response = await fetch('/api/auth/slack');
-          if (!response.ok) {
-            throw new Error('Unable to load Slack status');
-          }
-          const data = await response.json();
-          slackWorkspace.value = data.workspace || '';
-          slackToken.value = '';
-          if (data.has_token) {
-            const updated = data.updated_at ? `Saved $${new Date(data.updated_at).toLocaleString()}.` : '';
-            const workspace = data.workspace ? `for $${data.workspace}` : '';
-            setStatus(slackStatus, `Slack credentials $${workspace} stored. $${updated}`.trim());
-          } else {
-            setStatus(slackStatus, 'Add a Slack user token and click “Save Slack Credentials”.', true);
-          }
-        } catch (error) {
-          setStatus(slackStatus, error.message, true);
-        }
-      };
-
-      const submit = async (event) => {
-        event.preventDefault();
-        const formData = new FormData(form);
-        const payload = Object.fromEntries(formData.entries());
-
-        payload.poll_gmail_drive_calendar_seconds = Number(payload.poll_gmail_drive_calendar_seconds || '0');
-        payload.poll_slack_active_seconds = Number(payload.poll_slack_active_seconds || '0');
-        payload.poll_slack_idle_seconds = Number(payload.poll_slack_idle_seconds || '0');
-        payload.gmail_fallback_days = Number(payload.gmail_fallback_days || '0');
-        payload.gmail_backfill_days = Number(payload.gmail_backfill_days || '0');
-        payload.drive_backfill_days = Number(payload.drive_backfill_days || '0');
-        payload.calendar_backfill_days = Number(payload.calendar_backfill_days || '0');
-        payload.slack_backfill_days = Number(payload.slack_backfill_days || '0');
-        payload.summarization_threshold = Number(payload.summarization_threshold || '0');
-        payload.summarization_max_chars = Number(payload.summarization_max_chars || '0');
-        payload.summarization_sentence_count = Number(payload.summarization_sentence_count || '0');
-        payload.backup_retention_days = Number(payload.backup_retention_days || '0');
-        payload.log_retention_days = Number(payload.log_retention_days || '0');
-
-        payload.slack_search_query = (payload.slack_search_query || '').trim();
-        payload.calendar_ids = parseList(payload.calendar_ids || '');
-        payload.redaction_rules = parseRedaction(payload.redaction_rules || '');
-
-        const submitButton = form.querySelector('button[type="submit"]');
-        try {
-          if (submitButton) submitButton.disabled = true;
-          const response = await fetch('/api/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          if (!response.ok) {
-            const detail = await response.json().catch(() => ({}));
-            throw new Error(detail.detail || 'Unable to save configuration');
-          }
-          setStatus(statusEl, 'Configuration saved successfully.');
-          await loadGoogleStatus().catch(() => {});
-          await loadLogCategories().catch(() => {});
-        } catch (error) {
-          setStatus(statusEl, error.message, true);
-        } finally {
-          if (submitButton) submitButton.disabled = false;
-        }
-      };
-
-      form.addEventListener('submit', submit);
 
       const googleAuthorize = async () => {
         if (!googleButton) return;
@@ -1381,7 +1527,8 @@ def _render_index(payload: ConfigPayload) -> str:
           setStatus(googleStatus, 'Complete the Google consent screen in the new window.');
           window.open(data.auth_url, 'google-oauth', 'width=520,height=720');
         } catch (error) {
-          setStatus(googleStatus, error.message, true);
+          const message = error instanceof Error ? error.message : String(error || 'Unable to start Google sign-in');
+          setStatus(googleStatus, message, true);
         } finally {
           googleButton.disabled = false;
         }
@@ -1423,7 +1570,8 @@ def _render_index(payload: ConfigPayload) -> str:
             await loadSlackStatus();
             setStatus(slackStatus, 'Slack credentials saved successfully.');
           } catch (error) {
-            setStatus(slackStatus, error.message, true);
+            const message = error instanceof Error ? error.message : String(error || 'Unable to save Slack credentials');
+            setStatus(slackStatus, message, true);
           }
         });
       }
@@ -1448,17 +1596,18 @@ def _render_index(payload: ConfigPayload) -> str:
               channels.forEach((channel) => {
                 const li = document.createElement('li');
                 const name = channel.name || channel.id || 'unknown';
-                li.textContent = `#$${name}`;
+                li.textContent = `#$$${name}`;
                 list.appendChild(li);
               });
               slackChannels.innerHTML = '';
               slackChannels.appendChild(list);
             }
-            setStatus(slackInventoryStatus, `Fetched $${channels.length} channels.`);
+            setStatus(slackInventoryStatus, `Fetched $$${channels.length} channels.`);
             await refreshLogs().catch(() => {});
           } catch (error) {
             slackChannels.textContent = '';
-            setStatus(slackInventoryStatus, error.message, true);
+            const message = error instanceof Error ? error.message : String(error || 'Unable to inventory Slack channels');
+            setStatus(slackInventoryStatus, message, true);
           } finally {
             slackInventoryButton.disabled = false;
           }
@@ -1466,7 +1615,7 @@ def _render_index(payload: ConfigPayload) -> str:
       }
 
       const runManualLoad = async (service, button) => {
-        const input = document.querySelector(`[name="$${service}_manual_days"]`);
+        const input = document.querySelector(`[name="$$${service}_manual_days"]`);
         const fallback = Number(input?.dataset.default || '30');
         const parsed = Number(input?.value || fallback);
         if (!Number.isFinite(parsed) || parsed < 1) {
@@ -1474,10 +1623,10 @@ def _render_index(payload: ConfigPayload) -> str:
           return;
         }
         const days = Math.floor(parsed);
-        setStatus(loaderStatus, `Running $${service} backfill...`);
+        setStatus(loaderStatus, `Running $$${service} backfill...`);
         if (button) button.disabled = true;
         try {
-          const response = await fetch(`/api/manual-load/$${service}`, {
+          const response = await fetch(`/api/manual-load/$$${service}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ days }),
@@ -1487,10 +1636,11 @@ def _render_index(payload: ConfigPayload) -> str:
             throw new Error(detail.detail || 'Backfill failed');
           }
           const data = await response.json();
-          setStatus(loaderStatus, `$${service} backfill completed: $${data.processed} episodes.`);
+          setStatus(loaderStatus, `$$${service} backfill completed: $$${data.processed} episodes.`);
           await refreshLogs().catch(() => {});
         } catch (error) {
-          setStatus(loaderStatus, error.message, true);
+          const message = error instanceof Error ? error.message : String(error || 'Backfill failed');
+          setStatus(loaderStatus, message, true);
         } finally {
           if (button) button.disabled = false;
         }
@@ -1502,19 +1652,20 @@ def _render_index(payload: ConfigPayload) -> str:
 
       const runPoller = async (source, button) => {
         if (!source) return;
-        setStatus(pollerStatus, `Running $${source} poller...`);
+        setStatus(pollerStatus, `Running $$${source} poller...`);
         if (button) button.disabled = true;
         try {
-          const response = await fetch(`/api/pollers/$${source}/run`, { method: 'POST' });
+          const response = await fetch(`/api/pollers/$$${source}/run`, { method: 'POST' });
           if (!response.ok) {
             const detail = await response.json().catch(() => ({}));
             throw new Error(detail.detail || 'Poller run failed');
           }
           const data = await response.json();
-          setStatus(pollerStatus, `$${source} poller processed $${data.processed} items.`);
+          setStatus(pollerStatus, `$$${source} poller processed $$${data.processed} items.`);
           await refreshLogs().catch(() => {});
         } catch (error) {
-          setStatus(pollerStatus, error.message, true);
+          const message = error instanceof Error ? error.message : String(error || 'Poller run failed');
+          setStatus(pollerStatus, message, true);
         } finally {
           if (button) button.disabled = false;
         }
@@ -1527,12 +1678,13 @@ def _render_index(payload: ConfigPayload) -> str:
       const runBackup = async () => {
         const button = document.getElementById('run-backup');
         if (!button) return;
-        setStatus(backupStatus, 'Creating backup...');
         button.disabled = true;
+        setStatus(backupStatus, 'Starting backup...');
         try {
           const response = await fetch('/api/backup/run', { method: 'POST' });
           if (!response.ok) {
-            throw new Error('Unable to trigger backup');
+            const detail = await response.json().catch(() => ({}));
+            throw new Error(detail.detail || 'Unable to trigger backup');
           }
           const data = await response.json();
           const message = data.status || 'Backup completed.';
@@ -1541,7 +1693,8 @@ def _render_index(payload: ConfigPayload) -> str:
             await refreshLogs().catch(() => {});
           }
         } catch (error) {
-          setStatus(backupStatus, error.message, true);
+          const message = error instanceof Error ? error.message : String(error || 'Unable to trigger backup');
+          setStatus(backupStatus, message, true);
         } finally {
           button.disabled = false;
         }
@@ -1551,57 +1704,6 @@ def _render_index(payload: ConfigPayload) -> str:
       if (backupButton) {
         backupButton.addEventListener('click', runBackup);
       }
-
-      const loadLogCategories = async () => {
-        try {
-          const response = await fetch('/api/logs/categories');
-          if (!response.ok) {
-            throw new Error('Unable to load log categories');
-          }
-          const data = await response.json();
-          const categories = data.categories || ['system', 'episodes'];
-          const current = logCategorySelect.value;
-          logCategorySelect.innerHTML = '';
-          categories.forEach((category) => {
-            const option = document.createElement('option');
-            option.value = category;
-            option.textContent = category;
-            if (category === current) option.selected = true;
-            logCategorySelect.appendChild(option);
-          });
-        } catch (error) {
-          logCategorySelect.innerHTML = '<option value="system">system</option>';
-          throw error;
-        }
-      };
-
-      const refreshLogs = async () => {
-        setStatus(logsStatus, 'Loading logs...');
-        try {
-          const params = new URLSearchParams();
-          const category = logCategorySelect.value || 'system';
-          params.set('category', category);
-          const limit = Number(logLimitInput.value || '200');
-          params.set('limit', String(Math.max(1, Math.floor(limit))));
-          const since = Number(logSinceInput.value || '0');
-          if (Number.isFinite(since) && since > 0) {
-            params.set('since_days', String(Math.floor(since)));
-          }
-          const response = await fetch(`/api/logs?$${params.toString()}`);
-          if (!response.ok) {
-            throw new Error('Unable to fetch logs');
-          }
-          const data = await response.json();
-          const entries = Array.isArray(data.records) ? data.records : [];
-          logContainer.textContent = entries.length
-            ? entries.map((record) => JSON.stringify(record)).join('\n')
-            : 'No log entries available.';
-          setStatus(logsStatus, `Loaded $${entries.length} log entries.`);
-        } catch (error) {
-          logContainer.textContent = '';
-          setStatus(logsStatus, error.message, true);
-        }
-      };
 
       const refreshButton = document.getElementById('refresh-logs');
       if (refreshButton) {
@@ -1617,7 +1719,10 @@ def _render_index(payload: ConfigPayload) -> str:
         await refreshLogs().catch((error) => setStatus(logsStatus, error.message, true));
       };
 
-      bootstrap().catch((error) => setStatus(statusEl, error.message, true));
+      bootstrap().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error || 'Initialisation failed');
+        setStatus(defaultStatus, message, true);
+      });
     })();
   </script>
 </body>
