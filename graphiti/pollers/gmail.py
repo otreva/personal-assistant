@@ -7,6 +7,7 @@ from typing import Iterable, Mapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
+from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
 
 
@@ -47,6 +48,7 @@ class GmailPoller:
                 "Episode store group_id does not match configuration group_id"
             )
         self._group_id = self._config.group_id
+        self._processor = EpisodeProcessor(self._config)
 
     def run_once(self) -> int:
         state = self._state.load_state()
@@ -67,7 +69,7 @@ class GmailPoller:
                 continue
             seen.add(message_id)
             message = self._gmail.fetch_message(message_id)
-            episode = self._normalize_message(message)
+            episode = self._processor.process(self._normalize_message(message))
             self._episodes.upsert_episode(episode)
             processed += 1
 

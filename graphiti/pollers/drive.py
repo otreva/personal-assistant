@@ -6,6 +6,7 @@ from typing import Iterable, Mapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
+from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
 
 
@@ -44,6 +45,7 @@ class DrivePoller:
         if self._episodes.group_id != self._config.group_id:
             raise ValueError("Episode store group_id does not match configuration group_id")
         self._group_id = self._config.group_id
+        self._processor = EpisodeProcessor(self._config)
 
     def run_once(self) -> int:
         state = self._state.load_state()
@@ -56,7 +58,7 @@ class DrivePoller:
             episode = self._normalize_change(change)
             if episode is None:
                 continue
-            self._episodes.upsert_episode(episode)
+            self._episodes.upsert_episode(self._processor.process(episode))
             processed += 1
 
         self._state.update_state(

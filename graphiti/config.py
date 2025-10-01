@@ -24,6 +24,12 @@ class GraphitiConfig:
     gmail_fallback_days: int = 7
     slack_channel_allowlist: tuple[str, ...] = ()
     calendar_ids: tuple[str, ...] = ("primary",)
+    redaction_rules_path: str | None = None
+    redaction_rules: tuple[tuple[str, str], ...] = ()
+    summarization_strategy: str = "heuristic"
+    summarization_threshold: int = 4000
+    summarization_max_chars: int = 1200
+    summarization_sentence_count: int = 5
 
     @classmethod
     def from_mapping(
@@ -67,6 +73,24 @@ class GraphitiConfig:
             calendar_ids=_parse_csv(
                 values.get("CALENDAR_IDS"), defaults.calendar_ids
             ),
+            redaction_rules_path=values.get(
+                "REDACTION_RULES_PATH", defaults.redaction_rules_path
+            ),
+            redaction_rules=_parse_redaction_rules(
+                values.get("REDACTION_RULES"), defaults.redaction_rules
+            ),
+            summarization_strategy=values.get(
+                "SUMMARY_STRATEGY", defaults.summarization_strategy
+            ),
+            summarization_threshold=get_int(
+                "SUMMARY_THRESHOLD", defaults.summarization_threshold
+            ),
+            summarization_max_chars=get_int(
+                "SUMMARY_MAX_CHARS", defaults.summarization_max_chars
+            ),
+            summarization_sentence_count=get_int(
+                "SUMMARY_SENTENCE_COUNT", defaults.summarization_sentence_count
+            ),
         )
 
 
@@ -77,6 +101,42 @@ def _parse_csv(raw: Optional[str], default: tuple[str, ...]) -> tuple[str, ...]:
     if not items:
         return ()
     return tuple(dict.fromkeys(items))
+
+
+def _parse_redaction_rules(
+    raw: Optional[str], default: tuple[tuple[str, str], ...]
+) -> tuple[tuple[str, str], ...]:
+    if raw is None or raw.strip() == "":
+        return default
+    raw = raw.strip()
+    candidates: list[tuple[str, str]] = []
+    try:
+        import json
+
+        data = json.loads(raw)
+    except Exception:  # pragma: no cover - defensive JSON parsing fallback
+        parts = [segment.strip() for segment in raw.split(";;") if segment.strip()]
+        for part in parts:
+            if "=>" not in part:
+                continue
+            pattern, replacement = [chunk.strip() for chunk in part.split("=>", 1)]
+            if pattern:
+                candidates.append((pattern, replacement))
+        if not candidates:
+            return default
+        return tuple(candidates)
+
+    if isinstance(data, list):
+        for entry in data:
+            if not isinstance(entry, Mapping):
+                continue
+            pattern = entry.get("pattern")
+            replacement = entry.get("replacement", "[REDACTED]")
+            if isinstance(pattern, str) and pattern:
+                candidates.append((pattern, str(replacement)))
+    if candidates:
+        return tuple(candidates)
+    return default
 
 
 def _parse_dotenv(path: Path) -> Dict[str, str]:

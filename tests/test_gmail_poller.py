@@ -81,3 +81,30 @@ def test_gmail_poller_validates_group_id(tmp_path):
 
     with pytest.raises(ValueError):
         GmailPoller(mock.MagicMock(), episode_store, state_store, config)
+
+
+def test_gmail_poller_applies_episode_processor(tmp_path):
+    config = GraphitiConfig(
+        group_id="group",
+        redaction_rules=((r"secret", "[MASK]"),),
+        summarization_threshold=1,
+        summarization_max_chars=10,
+        summarization_sentence_count=1,
+    )
+    gmail_client = mock.MagicMock()
+    gmail_client.list_history.return_value = GmailHistoryResult(["m1"], "456")
+    gmail_client.fetch_message.return_value = _message("m1", snippet="secret secret secret")
+
+    episode_store = mock.MagicMock(spec=Neo4jEpisodeStore)
+    type(episode_store).group_id = mock.PropertyMock(return_value=config.group_id)
+    state_store = GraphitiStateStore(base_dir=tmp_path / "state")
+
+    poller = GmailPoller(gmail_client, episode_store, state_store, config)
+    poller.run_once()
+
+    args, _ = episode_store.upsert_episode.call_args
+    saved = args[0]
+    assert saved.text.startswith("[MASK]")
+    processing = saved.metadata["graphiti_processing"]
+    assert processing["redactions"]["rules"]["secret"] >= 1
+    assert processing["summarisation"]["summary_length"] <= 10

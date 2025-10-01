@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+from pathlib import Path
 from unittest import mock
 
 from graphiti import GraphitiStateStore, cli
@@ -94,8 +95,24 @@ def test_cli_sync_status(monkeypatch, tmp_path, capsys):
 
     exit_code = cli.main(["sync", "status"])
     assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Graphiti Sync Status" in output
+    assert "gmail" in output
+    assert "123" not in output  # checkpoint details suppressed in dashboard
+
+
+def test_cli_sync_status_json(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    store = GraphitiStateStore()
+    store.update_state({
+        "gmail": {"last_run_at": "2024-01-01T00:00:00Z", "last_history_id": "123"}
+    })
+    monkeypatch.setattr(cli, "GraphitiStateStore", lambda: store)
+
+    exit_code = cli.main(["sync", "status", "--json"])
+    assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["gmail"]["checkpoint"]["last_history_id"] == "123"
+    assert payload["sources"]["gmail"]["last_run_at"].startswith("2024-01-01")
 
 
 def test_cli_sync_scheduler_once(monkeypatch, tmp_path, capsys):
@@ -133,3 +150,32 @@ def test_cli_sync_scheduler_once(monkeypatch, tmp_path, capsys):
     assert exit_code == 0
     metrics = json.loads(capsys.readouterr().out)["metrics"]
     assert {entry["source"] for entry in metrics} == {"gmail", "drive", "calendar", "slack"}
+
+
+def test_cli_backup_state(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    store = GraphitiStateStore()
+    store.save_state({"gmail": {"last_history_id": "123"}})
+    monkeypatch.setattr(cli, "GraphitiStateStore", lambda: store)
+
+    exit_code = cli.main(["backup", "state", "--output", str(tmp_path)])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    archive = Path(payload["backup_path"])
+    assert archive.exists()
+
+
+def test_cli_restore_state(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    store = GraphitiStateStore()
+    store.save_state({"gmail": {"last_history_id": "old"}})
+    monkeypatch.setattr(cli, "GraphitiStateStore", lambda: store)
+
+    archive = cli.create_state_backup(store, destination=tmp_path)  # type: ignore[attr-defined]
+    store.save_state({"gmail": {"last_history_id": "mutated"}})
+
+    exit_code = cli.main(["restore", "state", str(archive)])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert Path(payload["restored_from"]) == archive
+    assert store.load_state()["gmail"]["last_history_id"] == "old"

@@ -8,6 +8,7 @@ from typing import Iterable, Mapping, MutableMapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
+from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
 
 
@@ -44,6 +45,7 @@ class SlackPoller:
     _config: GraphitiConfig = field(init=False)
     _group_id: str = field(init=False)
     _allowlist: set[str] = field(init=False)
+    _processor: EpisodeProcessor = field(init=False)
 
     def __post_init__(self) -> None:
         self._config = self.config or load_config()
@@ -52,6 +54,7 @@ class SlackPoller:
         self._group_id = self._config.group_id
         allow = [item.lower() for item in self.allowlist or self._config.slack_channel_allowlist]
         self._allowlist = set(allow)
+        self._processor = EpisodeProcessor(self._config)
 
     def run_once(self) -> int:
         state = self.state_store.load_state()
@@ -94,7 +97,7 @@ class SlackPoller:
                 episode = self._normalize_message(channel_id, metadata, message)
                 if episode is None:
                     continue
-                self.episode_store.upsert_episode(episode)
+                self.episode_store.upsert_episode(self._processor.process(episode))
                 processed += 1
                 channel_max_ts = self._max_ts(channel_max_ts, episode.version)
                 thread_ts = self._thread_ts(message)
@@ -216,7 +219,7 @@ class SlackPoller:
             episode = self._normalize_message(channel_id, metadata, reply)
             if episode is None:
                 continue
-            self.episode_store.upsert_episode(episode)
+            self.episode_store.upsert_episode(self._processor.process(episode))
             processed += 1
             thread_max_ts = self._max_ts(thread_max_ts, episode.version)
         if thread_max_ts:
