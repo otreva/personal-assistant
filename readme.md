@@ -6,13 +6,14 @@ The guide below walks a new operator through the entire setup — from installin
 
 ## Quick Start Overview
 
-1. Install Python 3.11+, Docker, and the Neo4j database driver.
-2. Launch a local Neo4j instance and configure Graphiti via a `.env` file.
-3. Create OAuth credentials for Google Workspace APIs and generate a user token for Slack.
-4. Store the tokens under `~/.graphiti_sync/` and confirm Graphiti can read them.
-5. Run the Gmail, Drive, Calendar, and Slack pollers once to seed the graph.
-6. Start the optional health endpoint or scheduler and monitor sync status.
-7. Back up the state directory regularly to protect checkpoints and credentials.
+1. Install Docker Desktop or another Docker runtime.
+2. Clone the repository and start the bundled admin UI via Docker (no local Python needed).
+3. Configure Graphiti through the web admin at <http://localhost:8000>.
+4. Create OAuth credentials for Google Workspace APIs and generate a user token for Slack.
+5. Store the tokens under `~/.graphiti_sync/` and confirm Graphiti can read them.
+6. Run the Gmail, Drive, Calendar, and Slack pollers once to seed the graph.
+7. Start the optional health endpoint or scheduler and monitor sync status.
+8. Back up the state directory regularly to protect checkpoints and credentials.
 
 Each step is detailed below.
 
@@ -30,25 +31,43 @@ Each step is detailed below.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-org/graphiti.git
-cd graphiti
+git clone https://github.com/graphiti-dev/personal-assistant.git
+cd personal-assistant
 ```
 
-### 2. Create and activate a Python environment
+### 2. Launch the Dockerised admin UI
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-```
+Graphiti ships with a `docker-compose.yml` file and a convenience script that mount the
+repository into a stock `python:3.12-slim` container, install runtime dependencies,
+and start the admin UI. No local Python environment is required.
 
-### 3. Install Python dependencies
+- **Using Docker Compose** (recommended if you want the container to stay running):
 
-Install the runtime dependencies (Neo4j driver, FastAPI for health checks, and optional tooling):
+  ```bash
+  docker compose up graphiti
+  ```
 
-```bash
-pip install neo4j fastapi uvicorn pytest
-```
+- **Using the helper script** (runs a one-off container):
+
+  ```bash
+  ./scripts/docker-run.sh
+  ```
+
+Both approaches expose the admin UI on <http://localhost:8000>. The first run installs
+Python dependencies into a cached Docker volume; subsequent runs reuse the cache.
+
+### 3. Configure Graphiti from the web admin
+
+Visit <http://localhost:8000> after starting the container. The admin UI detects existing
+settings from `~/.graphiti_sync/config.json` (created on first launch) and provides a dark
+mode/light mode aware form for editing them. Populate the Neo4j connection, polling
+intervals, and summarisation settings, then click **Save configuration**. The values are
+persisted back to `~/.graphiti_sync/config.json` with secure permissions.
+
+> **Note:** Environment variables and `.env` files are no longer required. The CLI and
+> pollers read directly from the JSON configuration managed by the admin UI. Environment
+> variables are still accepted as overrides for automation but are not needed for day-to-day
+> use.
 
 ### 4. Start Neo4j locally
 
@@ -68,25 +87,7 @@ Confirm the service is reachable:
 cypher-shell -u neo4j -p localgraph "RETURN 1"
 ```
 
-### 5. Configure Graphiti via `.env`
-
-Copy the sample below into a `.env` file at the project root and adjust values to match your environment:
-
-```bash
-cat > .env <<'ENV'
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASS=localgraph
-GROUP_ID=mike_assistant
-POLL_GMAIL_DRIVE_CAL=3600
-POLL_SLACK_ACTIVE=30
-POLL_SLACK_IDLE=3600
-GMAIL_FALLBACK_DAYS=7
-CALENDAR_IDS=primary
-ENV
-```
-
-### 6. Initialise the state directory
+### 5. Initialise the state directory
 
 Graphiti stores OAuth tokens and poller checkpoints under `~/.graphiti_sync/`. Run the status command once to create the directory with the correct permissions:
 
@@ -96,7 +97,7 @@ python -m graphiti.cli status
 
 The command prints the resolved configuration and confirms paths to `tokens.json` and `state.json`.
 
-### 7. Create Google API credentials
+### 6. Create Google API credentials
 
 1. In the Google Cloud Console, create an OAuth client for Desktop applications.
 2. Download the client secrets JSON and use Google’s OAuth Playground or [`gcloud auth application-default print-access-token`](https://cloud.google.com/sdk/gcloud/reference/auth/application-default/print-access-token) to perform the OAuth consent flow for the scopes:
@@ -122,7 +123,7 @@ The command prints the resolved configuration and confirms paths to `tokens.json
 
 4. Restrict file permissions to the current user (`chmod 600 ~/.graphiti_sync/tokens.json`).
 
-### 8. Generate a Slack user token
+### 7. Generate a Slack user token
 
 1. Visit <https://api.slack.com/apps>, create a new app, and enable the following user token scopes:
    - `channels:history`, `channels:read`
@@ -144,7 +145,7 @@ The command prints the resolved configuration and confirms paths to `tokens.json
 
 4. Limit file permissions again (`chmod 600 ~/.graphiti_sync/tokens.json`).
 
-### 9. Verify configuration and inventory Slack channels
+### 8. Verify configuration and inventory Slack channels
 
 List available Slack channels (and persist their metadata/IDs to state):
 
@@ -154,7 +155,7 @@ python -m graphiti.cli sync slack --list-channels
 
 The output is a JSON array of channels that Graphiti will poll. You can further restrict ingestion by setting `SLACK_CHANNEL_ALLOWLIST` in `.env` before running this command.
 
-### 10. Run the pollers to seed Graphiti
+### 9. Run the pollers to seed Graphiti
 
 Execute each poller once to ingest the latest activity:
 
@@ -167,11 +168,11 @@ python -m graphiti.cli sync slack --once
 
 Each command prints a JSON summary including how many episodes were written and the execution timestamp. Rerun the commands whenever you need a manual refresh.
 
-### 11. (Optional) Log MCP / Cursor turns
+### 10. (Optional) Log MCP / Cursor turns
 
 Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging them through `graphiti.mcp.logger.McpEpisodeLogger`. The logger batches turns and writes them via the same episode pipeline used by the pollers.
 
-### 12. Monitor health and scheduling
+### 11. Monitor health and scheduling
 
 - **Status dashboard:**
   ```bash
@@ -196,7 +197,7 @@ Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging 
   ```
   This sequentially runs all pollers and prints aggregate metrics. Use the output to wire Graphiti into a `launchd` or cron job.
 
-### 13. Back up and restore state
+### 12. Back up and restore state
 
 Create a timestamped archive of `~/.graphiti_sync/`:
 
@@ -212,7 +213,17 @@ python -m graphiti.cli restore state ~/Backups/graphiti-state-YYYYMMDDHHMMSS.tar
 
 Run the relevant `sync ... --once` commands afterward to resume polling from the restored checkpoints.
 
-### 14. Validate with the acceptance harness (optional)
+### 13. Validate with the acceptance harness (optional)
+
+To execute the tests inside Docker without installing Python locally, run:
+
+```bash
+docker run --rm -it \
+  -v "${PWD}:/app" \
+  -w /app \
+  python:3.12-slim \
+  bash -lc "python -m pip install --upgrade pip && pip install -r requirements.txt && pytest"
+```
 
 Developers can run the synthetic end-to-end test harness to confirm the ingestion pipeline:
 
