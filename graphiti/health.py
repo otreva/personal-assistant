@@ -75,7 +75,7 @@ def format_dashboard(metrics: Mapping[str, Any]) -> str:
     """Render a textual dashboard summarising sync health."""
 
     generated = metrics.get("generated_at")
-    header = "Graphiti Sync Status"
+    header = "Personal Assistant Sync Status"
     if isinstance(generated, str):
         header += f" — {generated}"
     lines = [header, ""]

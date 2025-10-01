@@ -1,6 +1,7 @@
-# Graphiti Deployment Guide (macOS)
+# Personal Assistant Deployment Guide (macOS)
 
-This guide walks through deploying Graphiti on a fresh macOS workstation, from prerequisites to launchd scheduling.
+This guide walks through deploying Personal Assistant (powered by Graphiti) on a fresh macOS workstation, from prerequisites to
+launchd scheduling and day-two operations.
 
 ## 1. Prerequisites
 
@@ -8,108 +9,119 @@ This guide walks through deploying Graphiti on a fresh macOS workstation, from p
 - Python 3.12 (via `brew install python@3.12`).
 - Docker Desktop (for Neo4j) or an existing Neo4j instance reachable over `bolt://`.
 - Google Workspace and Slack tokens with read-only scopes as outlined in the PRD.
+- Optional: `uvicorn` for exposing the health endpoint outside the admin UI.
 
 ## 2. Initial Setup
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-org/graphiti.git
-   cd graphiti
+   git clone https://github.com/otreva/personal-assistant.git
+   cd personal-assistant
    ```
 
-2. **Create a virtual environment**
+2. **Start the admin UI and Neo4j via Docker Compose**
    ```bash
-   python3.12 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt
+   docker compose up
    ```
 
-3. **Start Neo4j locally**
+   The Compose stack launches the admin UI container (`personal-assistant`) alongside Neo4j. It mounts the repository, reuses a
+   dedicated Python package cache, and persists Neo4j data to `./neo4j/`.
+
+3. **(Optional) One-off admin UI container**
    ```bash
-   docker run \
-     --name neo4j-graphiti \
-     -p 7474:7474 -p 7687:7687 \
-     -e NEO4J_AUTH=neo4j/password \
-     -d neo4j:5
+   ./scripts/docker-run.sh
    ```
 
-4. **Configure environment variables**
-   - Copy `.env.example` (if provided) to `.env` and populate:
-     - `NEO4J_URI=bolt://localhost:7687`
-     - `NEO4J_USER=neo4j`
-     - `NEO4J_PASS=password`
-     - `GROUP_ID=<your_group>`
-     - Optional: `SLACK_CHANNEL_ALLOWLIST`, `CALENDAR_IDS`, `REDACTION_RULES_PATH`, summarisation settings.
+   This helper script starts only the admin UI for quick configuration checks. It reuses persistent Docker volumes named
+   `personal_assistant_state` and `personal_assistant_pip_cache` so state and cached dependencies survive across runs.
 
-5. **Authenticate providers**
-   - Run `graphiti sync gmail --once`, follow OAuth prompts, and verify tokens stored under `~/.graphiti_sync/tokens.json`.
-   - Repeat for `drive`, `calendar`, and `slack`.
+## 3. Configure Personal Assistant
 
-## 3. Launchd Scheduling
+1. Visit <http://localhost:8000> after the container starts. The UI loads existing settings from `~/.graphiti_sync/config.json`
+   and displays them in grouped sections.
+2. Populate Neo4j credentials, polling cadences, backfill defaults, and summarisation options.
+3. Use the **Backups & Logging** controls to select paths via the OS-native directory picker. Both the backup directory and the
+   optional logs directory inputs accept spaces and update `~/.graphiti_sync/config.json` automatically when saved.
+4. Provide Google Workspace OAuth client credentials and authorise the Gmail, Drive, and Calendar scopes. Tokens are stored under
+   `~/.graphiti_sync/tokens.json`.
+5. Add your Slack user token, inventory workspace channels, and define the `slack_search_query` (for example `in:general has:link`).
+   The Slack poller uses the Search API, automatically resolves truncated messages, and caches user/channel metadata locally to
+   minimise API calls.
+6. Save the configuration. Future launches read the stored config and only require edits when credentials change.
 
-Create two launchd property lists in `~/Library/LaunchAgents/`:
+## 4. Launchd Scheduling
 
-### 3.1 Gmail/Drive/Calendar Poller (Hourly)
+Create two launchd property lists in `~/Library/LaunchAgents/` once configuration is complete.
 
-`com.graphiti.poller.hourly.plist`
+### 4.1 Gmail/Drive/Calendar Poller (Hourly)
+
+`com.personal-assistant.poller.hourly.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.graphiti.poller.hourly</string>
+  <key>Label</key><string>com.personal-assistant.poller.hourly</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/env</string>
     <string>bash</string>
     <string>-lc</string>
-    <string>cd /path/to/graphiti && source .venv/bin/activate && graphiti sync scheduler --once</string>
+    <string>cd /path/to/personal-assistant && source .venv/bin/activate && python -m graphiti.cli sync scheduler --once</string>
   </array>
   <key>StartInterval</key><integer>3600</integer>
-  <key>StandardOutPath</key><string>/tmp/graphiti-hourly.log</string>
-  <key>StandardErrorPath</key><string>/tmp/graphiti-hourly.err</string>
+  <key>StandardOutPath</key><string>/tmp/personal-assistant-hourly.log</string>
+  <key>StandardErrorPath</key><string>/tmp/personal-assistant-hourly.err</string>
 </dict>
 </plist>
 ```
 
-### 3.2 Slack Active Poller (Every 30 seconds)
+### 4.2 Slack Active Poller (Every 30 Seconds)
 
-`com.graphiti.poller.slack.plist`
+`com.personal-assistant.poller.slack.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.graphiti.poller.slack</string>
+  <key>Label</key><string>com.personal-assistant.poller.slack</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/env</string>
     <string>bash</string>
     <string>-lc</string>
-    <string>cd /path/to/graphiti && source .venv/bin/activate && graphiti sync slack --once</string>
+    <string>cd /path/to/personal-assistant && source .venv/bin/activate && python -m graphiti.cli sync slack --once</string>
   </array>
   <key>StartInterval</key><integer>30</integer>
-  <key>StandardOutPath</key><string>/tmp/graphiti-slack.log</string>
-  <key>StandardErrorPath</key><string>/tmp/graphiti-slack.err</string>
+  <key>StandardOutPath</key><string>/tmp/personal-assistant-slack.log</string>
+  <key>StandardErrorPath</key><string>/tmp/personal-assistant-slack.err</string>
 </dict>
 </plist>
 ```
 
-Load the jobs with `launchctl load ~/Library/LaunchAgents/com.graphiti.poller.hourly.plist` (repeat for Slack). Use `launchctl list | grep graphiti` to verify they are active.
+Load the jobs with `launchctl load ~/Library/LaunchAgents/com.personal-assistant.poller.hourly.plist` (and the Slack variant).
+Verify they are active with `launchctl list | grep personal-assistant`.
 
-## 4. Observability & Operations
+## 5. Observability & Operations
 
-- The `/health` endpoint (see `graphiti.health`) can be served via `uvicorn` for local dashboards.
-- Use `graphiti backup state --output <dir>` nightly; restore with `graphiti restore state <archive>`.
-- Monitor `/tmp/graphiti-*.log` for poll results and errors; rotate logs with `newsyslog` if required.
+- Run `python -m graphiti.cli sync status` to display the Personal Assistant sync dashboard. Append `--json` for automation.
+- Start the lightweight health service via `uvicorn "graphiti.health:create_health_app" --factory` if you need a HTTP endpoint.
+- Trigger backups with `python -m graphiti.cli backup state --output ~/Backups` and restore with
+  `python -m graphiti.cli restore state <archive.tar.gz>`. Archives are timestamped and retain secure file permissions.
+- The admin UI surfaces recent poll runs, backup results, log entries, and Slack inventory metadata inline so you can inspect
+  health without leaving the browser.
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
-- **Neo4j unavailable:** restart the container (`docker restart neo4j-graphiti`) and rerun `graphiti sync scheduler --once`.
-- **OAuth token expired:** delete the provider entry in `~/.graphiti_sync/tokens.json` and rerun the relevant poller to re-authenticate.
-- **Health status shows `stale`:** run the affected poller manually and inspect `/tmp/graphiti-*.err` for stack traces.
+- **Neo4j unavailable:** restart the container (`docker compose restart neo4j` if using Compose) and rerun
+  `python -m graphiti.cli sync scheduler --once`.
+- **OAuth token expired:** delete the provider entry in `~/.graphiti_sync/tokens.json` and rerun the relevant poller to trigger
+  re-authentication.
+- **Slack messages missing:** confirm the `slack_search_query` matches your desired scope (e.g. `from:@me`), re-run the Slack
+  poller, and check `/tmp/personal-assistant-slack.err` for API errors.
+- **Health status shows `stale`:** execute the affected poller manually and review `~/.graphiti_sync/state.json` for cursor issues.
+  Restore from the latest backup if corruption is detected.
 
-Following this checklist results in a reproducible, self-healing deployment aligned with the PRD's Definition of Done.
-
+Following this checklist results in a reproducible, self-healing deployment aligned with the Personal Assistant PRD.

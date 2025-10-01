@@ -45,7 +45,7 @@ def test_invalid_numeric_input_raises(
 def test_config_store_round_trip(config_path: Path) -> None:
     store = ConfigStore(config_path)
     original = GraphitiConfig(
-        slack_channel_allowlist=("C1", "C2"),
+        slack_search_query="in:general",
         calendar_ids=("primary", "team"),
         summarization_threshold=2000,
         redaction_rules=(
@@ -56,7 +56,7 @@ def test_config_store_round_trip(config_path: Path) -> None:
     store.save(original)
 
     loaded = store.load()
-    assert loaded.slack_channel_allowlist == ("C1", "C2")
+    assert loaded.slack_search_query == "in:general"
     assert loaded.calendar_ids == ("primary", "team")
     assert loaded.summarization_threshold == 2000
     assert loaded.redaction_rules == (

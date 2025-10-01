@@ -29,7 +29,7 @@ def test_cli_status_outputs_json(monkeypatch, tmp_path, capsys):
                 calendar_backfill_days=365,
                 slack_backfill_days=365,
                 calendar_ids=("primary",),
-                slack_channel_allowlist=(),
+                slack_search_query="in:general",
                 backup_directory="/tmp/backups",
                 backup_retention_days=14,
                 log_retention_days=30,
@@ -104,7 +104,7 @@ def test_cli_sync_status(monkeypatch, tmp_path, capsys):
     exit_code = cli.main(["sync", "status"])
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "Graphiti Sync Status" in output
+    assert "Personal Assistant Sync Status" in output
     assert "gmail" in output
     assert "123" not in output  # checkpoint details suppressed in dashboard
 
@@ -150,9 +150,7 @@ def test_cli_sync_scheduler_once(monkeypatch, tmp_path, capsys):
     slack_poller.run_once.return_value = 2
     monkeypatch.setattr(cli, "create_slack_client", lambda config, state: mock.Mock())
 
-    monkeypatch.setattr(
-        cli, "SlackPoller", lambda client, store, state, allowlist: slack_poller
-    )
+    monkeypatch.setattr(cli, "SlackPoller", lambda client, store, state: slack_poller)
 
     exit_code = cli.main(["sync", "scheduler", "--once"])
     assert exit_code == 0

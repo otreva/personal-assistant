@@ -60,7 +60,7 @@ class GraphitiConfig:
     drive_backfill_days: int = 365
     calendar_backfill_days: int = 365
     slack_backfill_days: int = 365
-    slack_channel_allowlist: tuple[str, ...] = ()
+    slack_search_query: str = ""
     calendar_ids: tuple[str, ...] = ("primary",)
     redaction_rules_path: str | None = None
     redaction_rules: tuple[tuple[str, str], ...] = ()
@@ -126,8 +126,11 @@ class GraphitiConfig:
             slack_backfill_days=get_int(
                 "SLACK_BACKFILL_DAYS", defaults.slack_backfill_days
             ),
-            slack_channel_allowlist=_parse_csv(
-                values.get("SLACK_CHANNEL_ALLOWLIST"), defaults.slack_channel_allowlist
+            slack_search_query=(
+                _clean_optional_str(
+                    values.get("SLACK_SEARCH_QUERY"), defaults.slack_search_query
+                )
+                or ""
             ),
             calendar_ids=_parse_csv(
                 values.get("CALENDAR_IDS"), defaults.calendar_ids
@@ -256,9 +259,9 @@ class GraphitiConfig:
             slack_backfill_days=get_int(
                 "slack_backfill_days", defaults.slack_backfill_days
             ),
-            slack_channel_allowlist=get_seq(
-                "slack_channel_allowlist", defaults.slack_channel_allowlist
-            ),
+            slack_search_query=get_str(
+                "slack_search_query", defaults.slack_search_query
+            ).strip(),
             calendar_ids=get_seq("calendar_ids", defaults.calendar_ids),
             redaction_rules_path=values.get(
                 "redaction_rules_path", defaults.redaction_rules_path
@@ -294,7 +297,7 @@ class GraphitiConfig:
 
     def to_json(self) -> Dict[str, Any]:
         payload = asdict(self)
-        payload["slack_channel_allowlist"] = list(self.slack_channel_allowlist)
+        payload["slack_search_query"] = self.slack_search_query
         payload["calendar_ids"] = list(self.calendar_ids)
         payload["redaction_rules"] = [
             {"pattern": pattern, "replacement": replacement}
@@ -461,7 +464,7 @@ ENV_KEYS = {
     "DRIVE_BACKFILL_DAYS",
     "CALENDAR_BACKFILL_DAYS",
     "SLACK_BACKFILL_DAYS",
-    "SLACK_CHANNEL_ALLOWLIST",
+    "SLACK_SEARCH_QUERY",
     "CALENDAR_IDS",
     "REDACTION_RULES_PATH",
     "REDACTION_RULES",

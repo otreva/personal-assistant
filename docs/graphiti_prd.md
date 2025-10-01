@@ -57,11 +57,11 @@ Build a local, privacy-first knowledge graph that continuously ingests Gmail, Go
 
 **Slack (Polling)**
 - Token has read scopes (no app creation).
-- Enumerate channels, DMs, and MPIMs the token can see.
-- Call `conversations.history?oldest=<last_seen_ts>` for each channel.
-- Optionally call `conversations.replies` for new thread messages since last thread timestamp.
+- Enumerate channels, DMs, and MPIMs the token can see to seed metadata caches.
+- Execute the configured `search.messages` query with `sort=timestamp` and `oldest=<last_seen_ts>`.
+- Fetch full message bodies when search snippets are truncated and enrich with cached user/channel metadata.
 - Create one episode per user message (skip non-user subtypes by default).
-- Keys: `channel_id` + `ts` (and `thread_ts` for replies). Version = message `ts`.
+- Keys: `channel_id` + `ts` (and `thread_ts` when present). Version = message `ts`.
 
 **MCP / Cursor**
 - For every turn, record `source="mcp"`, role `user|assistant|tool`, `thread_id`, and `message_id`.
@@ -83,7 +83,7 @@ Build a local, privacy-first knowledge graph that continuously ingests Gmail, Go
 - Offline for days must resume cleanly.
 - Gmail fallback window configurable (default 7–14 days).
 - Drive/Calendar tokens robust; on token expiry, perform full resync (seed new tokens).
-- Slack resumes via per-channel `last_seen_ts` and per-thread checkpoints.
+- Slack resumes via timestamp checkpoints for the configured search query and cached metadata.
 
 ## 5. Non-Functional Requirements
 - **Privacy:** all data local; tokens stored locally; nothing uploaded.
@@ -134,7 +134,7 @@ Build a local, privacy-first knowledge graph that continuously ingests Gmail, Go
 - Group: `GROUP_ID` (default `mike_assistant`)
 - Polling cadence: `POLL_GMAIL_DRIVE_CAL=3600s`, `POLL_SLACK_ACTIVE=30s`, `POLL_SLACK_IDLE=3600s`
 - Gmail fallback window: `GMAIL_FALLBACK_DAYS=7`
-- Allowlists: `SLACK_CHANNEL_ALLOWLIST?`, `DRIVE_MIME_ALLOWLIST?`
+- Search configuration: `SLACK_SEARCH_QUERY`; optional `DRIVE_MIME_ALLOWLIST`
 
 ## 8. Security & Compliance
 - Least-privilege scopes: Gmail/Drive/Calendar read-only; Slack read scopes only.
@@ -163,7 +163,7 @@ Build a local, privacy-first knowledge graph that continuously ingests Gmail, Go
   - CLI `sync:once` and `sync:status`.
 - **M1: Slack Poller**
   - Channel/thread checkpoints; DMs/MPIMs included (if scopes allow).
-  - Channel allowlist.
+  - Configurable search query with cached channel/user metadata.
 - **M2: MCP/Cursor**
   - Turn logging (episodes for user/assistant/tool).
   - Retrieval tools (search/as-of/paths) callable from Cursor.
@@ -174,7 +174,7 @@ Build a local, privacy-first knowledge graph that continuously ingests Gmail, Go
 
 ## 12. Risks & Mitigations
 - **Gmail history expiry:** fallback time window + reseed.
-- **Slack token scope limits:** start with available scopes, use channel allowlist; DM if blocked.
+- **Slack token scope limits:** start with available scopes, rely on search query filtering; DM if blocked.
 - **Large Docs:** size cap + optional summarization; still version with metadata.
 - **Token revocation:** prompt re-auth on failure; keep clear errors.
 

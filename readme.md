@@ -1,6 +1,6 @@
-# Graphiti Personal & Enterprise Assistant
+# Personal Assistant (Graphiti-powered)
 
-Graphiti is a local-first knowledge graph that continuously ingests Gmail, Google Drive, Google Calendar, Slack, and MCP/Cursor activity so your assistant can answer time-aware questions. This repository contains the product requirements, task plan, and a full Python reference implementation with pollers, persistence helpers, health checks, and an acceptance harness.
+Personal Assistant is a Graphiti-powered, local-first knowledge graph that continuously ingests Gmail, Google Drive, Google Calendar, Slack, and MCP/Cursor activity so your assistant can answer time-aware questions. This repository contains the product requirements, task plan, and a full Python reference implementation with pollers, persistence helpers, health checks, and an acceptance harness.
 
 The guide below walks a new operator through the entire setup — from installing prerequisites and creating API credentials to running the pollers, verifying health, and backing up state.
 
@@ -8,9 +8,9 @@ The guide below walks a new operator through the entire setup — from installin
 
 1. Install Docker Desktop or another Docker runtime.
 2. Clone the repository and start the bundled admin UI via Docker (no local Python needed).
-3. Configure Graphiti through the web admin at <http://localhost:8000>.
+3. Configure Personal Assistant through the web admin at <http://localhost:8000>.
 4. Create OAuth credentials for Google Workspace APIs and generate a user token for Slack.
-5. Store the tokens under `~/.graphiti_sync/` and confirm Graphiti can read them.
+5. Store the tokens under `~/.graphiti_sync/` and confirm Personal Assistant can read them.
 6. Use the admin UI's manual loaders to backfill ~365 days of history for Gmail, Drive, Calendar, and Slack.
 7. Run the Gmail, Drive, Calendar, and Slack pollers once to confirm incremental sync.
 8. Let the built-in 02:00 EST backup job archive state (or trigger a manual backup from the UI) and monitor logs directly in the browser.
@@ -31,13 +31,13 @@ Each step is detailed below.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/graphiti-dev/personal-assistant.git
+git clone https://github.com/otreva/personal-assistant.git
 cd personal-assistant
 ```
 
 ### 2. Launch the Dockerised admin UI
 
-Graphiti ships with a `docker-compose.yml` file that now boots both the admin UI and a
+Personal Assistant ships with a `docker-compose.yml` file that now boots both the admin UI and a
 Neo4j 5 instance. The compose stack mounts your repository, caches Python dependencies,
 and persists Neo4j data to `./neo4j/` so you can tear the stack down without losing the
 database. No local Python environment is required.
@@ -64,7 +64,7 @@ database. No local Python environment is required.
 Both approaches expose the admin UI on <http://localhost:8000>. The first compose run
 builds the Python environment; subsequent runs reuse the cached volume for faster starts.
 
-### 3. Configure Graphiti from the web admin
+### 3. Configure Personal Assistant from the web admin
 
 Visit <http://localhost:8000> after starting the container. The admin UI detects existing
 settings from `~/.graphiti_sync/config.json` (created on first launch) and provides a dark
@@ -81,7 +81,7 @@ secure permissions.
 
 ### 4. Review the state directory
 
-Graphiti stores OAuth tokens, poller checkpoints, and configuration under
+Personal Assistant stores OAuth tokens, poller checkpoints, and configuration under
 `~/.graphiti_sync/`. The admin UI surfaces the active paths in the **Backups & Logging**
 tab and automatically manages file permissions—no manual commands required.
 
@@ -110,9 +110,10 @@ tab and automatically manages file permissions—no manual commands required.
 
 ### 7. Verify configuration and inventory Slack channels
 
-Use the **Inventory Slack Channels** button in the Slack Workspace card to fetch all
-available channels and persist their metadata to state. The results appear inline and
-respect the allowlist configured in the **Polling Behaviour** section.
+Use the **Inventory Slack Channels** button in the Slack Workspace card to refresh the cached
+channel metadata. The results appear inline and complement the Slack search query configured
+in the **Polling Behaviour** section, which determines which messages Personal Assistant
+ingests.
 
 ### 8. Backfill the last year of history
 
@@ -121,7 +122,7 @@ Calendar, and Slack backfills. The defaults load 365 days of activity and includ
 rate-limit friendly pauses with jitter. You can rerun the loader at any time to fetch
 additional history without affecting incremental checkpoints.
 
-### 9. Run the pollers to seed Graphiti
+### 9. Run the pollers to seed Personal Assistant
 
 Use the **Run Pollers Once** section in the admin UI to trigger Gmail, Drive, Calendar,
 and Slack pollers on demand. The UI displays the number of episodes processed and records
@@ -145,7 +146,7 @@ Integrate your MCP or Cursor workflow by creating `McpTurn` objects and logging 
 
 ### 12. Back up and restore state
 
-Graphiti automatically creates a timestamped `.tar.gz` backup of `~/.graphiti_sync/`
+Personal Assistant automatically creates a timestamped `.tar.gz` backup of `~/.graphiti_sync/`
 every day at **02:00 EST**. Archives are written to the directory configured in the
 admin UI (default `~/.graphiti_sync/backups`) and older files are pruned according to the
 retention window. Use the **Run Backup** button in the Backups card to trigger an ad-hoc

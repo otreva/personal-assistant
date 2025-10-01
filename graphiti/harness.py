@@ -81,7 +81,6 @@ class AcceptanceTestHarness:
             slack_client,
             self.episode_store,
             self._state,
-            allowlist=self._config.slack_channel_allowlist,
             config=self._config,
         )
         metrics["slack"] = slack_poller.run_once()
@@ -149,16 +148,60 @@ class _HarnessSlackClient:
     def list_channels(self) -> Iterable[Mapping[str, object]]:
         return list(self.channels)
 
-    def fetch_channel_history(
-        self, channel_id: str, oldest_ts: str | None
-    ) -> Iterable[Mapping[str, object]]:
-        return list(self.messages.get(channel_id, ()))
+    def search_messages(
+        self,
+        query: str,
+        *,
+        oldest: str | None = None,
+        cursor: str | None = None,
+    ) -> Mapping[str, object]:
+        try:
+            oldest_value = float(oldest) if oldest else None
+        except ValueError:
+            oldest_value = None
+        results: list[Mapping[str, object]] = []
+        for channel in self.channels:
+            channel_id = str(channel.get("id"))
+            for message in self.messages.get(channel_id, ()):  # type: ignore[arg-type]
+                ts = str(message.get("ts", ""))
+                if oldest_value is not None:
+                    try:
+                        if float(ts) <= oldest_value:
+                            continue
+                    except ValueError:
+                        pass
+                enriched = dict(message)
+                enriched.setdefault("channel", {"id": channel_id, "name": channel.get("name")})
+                results.append(enriched)
+        results.sort(key=lambda item: float(str(item.get("ts", "0"))), reverse=False)
+        return {"messages": results, "next_cursor": None}
 
-    def fetch_thread_replies(
-        self, channel_id: str, thread_ts: str, oldest_ts: str | None
-    ) -> Iterable[Mapping[str, object]]:
-        channel_threads = self.threads.get(channel_id, {})
-        return list(channel_threads.get(thread_ts, ()))
+    def fetch_message(self, channel_id: str, ts: str) -> Mapping[str, object]:
+        for entry in self.messages.get(channel_id, ()):  # type: ignore[arg-type]
+            if str(entry.get("ts")) == str(ts):
+                return dict(entry)
+        for entry in self.threads.get(channel_id, {}).values():
+            for reply in entry:
+                if str(reply.get("ts")) == str(ts):
+                    payload = dict(reply)
+                    payload.setdefault("channel", {"id": channel_id})
+                    return payload
+        return {}
+
+    def resolve_user(self, user_id: str) -> Mapping[str, object] | None:
+        if not user_id:
+            return None
+        return {
+            "id": user_id,
+            "name": f"User {user_id}",
+            "email": f"{user_id.lower()}@example.com",
+        }
+
+    def resolve_channel(self, channel_id: str) -> Mapping[str, object] | None:
+        for channel in self.channels:
+            if str(channel.get("id")) == str(channel_id):
+                return {"id": channel_id, "name": channel.get("name")}
+        return {"id": channel_id}
 
 
 def build_fixture_dataset(start: datetime | None = None) -> AcceptanceDataset:

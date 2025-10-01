@@ -1,10 +1,10 @@
-# Graphiti Operations Guide
+# Personal Assistant Operations Guide
 
-This document outlines day-to-day operational tasks for running Graphiti in a local environment, including observability, data hygiene, and backup/restore workflows.
+This document outlines day-to-day operational tasks for running Personal Assistant (powered by Graphiti) in a local environment, including observability, data hygiene, and backup/restore workflows.
 
 ## 1. Health Monitoring
 
-- Run `graphiti sync status` to view a textual dashboard summarising the last successful run for Gmail, Drive, Calendar, Slack, and MCP.
+- Run `python -m graphiti.cli sync status` to view a textual dashboard summarising the last successful run for Gmail, Drive, Calendar, Slack, and MCP.
 - Append `--json` to emit the raw payload for scripting integrations.
 - Start the lightweight health service by embedding `graphiti.health.create_health_app()` into a WSGI/FastAPI runner. The `/health` endpoint returns a JSON document with last run timestamps, error counters, and overall status (`ok`, `stale`, or `error`).
 - Investigate any source marked as `stale` (no run within two polling intervals) or `error` (non-zero error count).
@@ -20,12 +20,12 @@ This document outlines day-to-day operational tasks for running Graphiti in a lo
 
 ## 3. Backup & Restore
 
-Graphiti stores OAuth tokens and poller checkpoints under `~/.graphiti_sync/`. Regular backups protect against accidental deletion or workstation migrations.
+Personal Assistant stores OAuth tokens and poller checkpoints under `~/.graphiti_sync/`. Regular backups protect against accidental deletion or workstation migrations.
 
 ### 3.1 Creating Backups
 
 ```bash
-graphiti backup state --output ~/Backups
+python -m graphiti.cli backup state --output ~/Backups
 ```
 
 - If `--output` is omitted, the archive is created in the current working directory.
@@ -35,12 +35,12 @@ graphiti backup state --output ~/Backups
 ### 3.2 Restoring from Backups
 
 ```bash
-graphiti restore state /path/to/graphiti-state-20240101120000.tar.gz
+python -m graphiti.cli restore state /path/to/graphiti-state-20240101120000.tar.gz
 ```
 
 - Existing state contents are replaced with the archive contents after safety validation (no path traversal).
 - File permissions are reset to `0700` for directories and `0600` for files to preserve local-only access.
-- After restoring, rerun the relevant `graphiti sync ... --once` command to resume polling from the restored checkpoints.
+- After restoring, rerun the relevant `python -m graphiti.cli sync ... --once` command to resume polling from the restored checkpoints.
 
 ### 3.3 Retention Recommendations
 
@@ -49,9 +49,9 @@ graphiti restore state /path/to/graphiti-state-20240101120000.tar.gz
 
 ## 4. Incident Runbook
 
-- **Health endpoint reports `stale`:** run the associated `graphiti sync <source> --once` command. If it fails, inspect `~/.graphiti_sync/state.json` for corrupted cursors and restore from the latest backup.
+- **Health endpoint reports `stale`:** run the associated `python -m graphiti.cli sync <source> --once` command. If it fails, inspect `~/.graphiti_sync/state.json` for corrupted cursors and restore from the latest backup.
 - **Authentication failures:** delete only the provider-specific token entry in `tokens.json`, rerun the poller, and complete OAuth re-authentication when prompted.
 - **Disk usage growth:** review the size of `graphiti-state-*.tar.gz` archives and prune old backups beyond the retention window.
 
-Maintaining these operational habits ensures Graphiti remains resilient, auditable, and recoverable even when offline for extended periods.
+Maintaining these operational habits ensures Personal Assistant remains resilient, auditable, and recoverable even when offline for extended periods.
 
