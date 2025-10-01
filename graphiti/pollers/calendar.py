@@ -6,6 +6,7 @@ from typing import Iterable, Mapping, Protocol
 
 from ..config import GraphitiConfig, load_config
 from ..episodes import Episode, Neo4jEpisodeStore
+from ..hooks import EpisodeProcessor
 from ..state import GraphitiStateStore
 
 
@@ -44,6 +45,7 @@ class CalendarPoller:
             raise ValueError("Episode store group_id does not match configuration group_id")
         self._group_id = self._config.group_id
         self._calendar_ids = list(calendar_ids)
+        self._processor = EpisodeProcessor(self._config)
 
     def run_once(self) -> int:
         state = self._state.load_state()
@@ -61,7 +63,9 @@ class CalendarPoller:
                 page = self._client.full_sync(calendar_id)
 
             for event in page.events:
-                episode = self._normalize_event(calendar_id, event)
+                episode = self._processor.process(
+                    self._normalize_event(calendar_id, event)
+                )
                 self._episodes.upsert_episode(episode)
                 processed += 1
             new_tokens[calendar_id] = page.next_sync_token

@@ -5,10 +5,13 @@ import argparse
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .config import GraphitiConfig, load_config
 from .episodes import Neo4jEpisodeStore
+from .health import collect_health_metrics, format_dashboard
+from .ops import create_state_backup, restore_state_backup
 from .pollers.calendar import CalendarPoller
 from .pollers.drive import DrivePoller
 from .pollers.gmail import GmailPoller
@@ -53,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync_status = sync_sub.add_parser(
         "status", help="Summarise the last recorded sync checkpoints"
     )
+    sync_status.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit raw JSON instead of the textual dashboard",
+    )
     sync_status.set_defaults(func=cmd_sync_status)
 
     scheduler = sync_sub.add_parser("scheduler", help="Run the scheduler stub")
@@ -62,6 +70,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Execute each poller sequentially once",
     )
     scheduler.set_defaults(func=cmd_sync_scheduler)
+
+    backup = sub.add_parser("backup", help="Backup utilities")
+    backup_sub = backup.add_subparsers(dest="backup_command", required=True)
+    backup_state = backup_sub.add_parser("state", help="Create a state backup archive")
+    backup_state.add_argument(
+        "--output",
+        type=str,
+        help="Directory or file path for the backup archive",
+    )
+    backup_state.set_defaults(func=cmd_backup_state)
+
+    restore = sub.add_parser("restore", help="Restore utilities")
+    restore_sub = restore.add_subparsers(dest="restore_command", required=True)
+    restore_state = restore_sub.add_parser("state", help="Restore state from an archive")
+    restore_state.add_argument(
+        "archive",
+        type=str,
+        help="Path to a backup archive created via `backup state`",
+    )
+    restore_state.set_defaults(func=cmd_restore_state)
 
     return parser
 
@@ -95,31 +123,13 @@ def cmd_status(_: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_sync_status(_: argparse.Namespace) -> int:
+def cmd_sync_status(args: argparse.Namespace) -> int:
     config, state = _bootstrap()
-    data = state.load_state()
-
-    def _extract(source: str) -> Mapping[str, Any]:
-        value = data.get(source)
-        return value if isinstance(value, Mapping) else {}
-
-    summary = {
-        source: {
-            "last_run_at": _extract(source).get("last_run_at"),
-            "checkpoint": {
-                key: value
-                for key, value in _extract(source).items()
-                if key not in {"last_run_at"}
-            },
-        }
-        for source in ("gmail", "drive", "calendar", "slack")
-    }
-    summary["config"] = {
-        "group_id": config.group_id,
-        "calendar_ids": list(config.calendar_ids),
-        "slack_allowlist": list(config.slack_channel_allowlist),
-    }
-    print(json.dumps(summary, indent=DEFAULT_INDENT, sort_keys=True))
+    metrics = collect_health_metrics(state, config)
+    if getattr(args, "json", False):
+        print(json.dumps(metrics, indent=DEFAULT_INDENT, sort_keys=True))
+    else:
+        print(format_dashboard(metrics))
     return 0
 
 
@@ -220,6 +230,27 @@ def cmd_sync_scheduler(args: argparse.Namespace) -> int:
     payload = {
         "ran_at": datetime.now(timezone.utc).isoformat(),
         "metrics": metrics,
+    }
+    print(json.dumps(payload, indent=DEFAULT_INDENT, sort_keys=True))
+    return 0
+
+
+def cmd_backup_state(args: argparse.Namespace) -> int:
+    _, state = _bootstrap()
+    destination = Path(args.output) if getattr(args, "output", None) else None
+    archive = create_state_backup(state, destination=destination)
+    payload = {"backup_path": str(archive)}
+    print(json.dumps(payload, indent=DEFAULT_INDENT, sort_keys=True))
+    return 0
+
+
+def cmd_restore_state(args: argparse.Namespace) -> int:
+    _, state = _bootstrap()
+    archive = Path(args.archive)
+    restored = restore_state_backup(state, archive)
+    payload = {
+        "restored_from": str(archive),
+        "state_path": str(restored),
     }
     print(json.dumps(payload, indent=DEFAULT_INDENT, sort_keys=True))
     return 0
@@ -374,6 +405,8 @@ def create_slack_client(
 COMMAND_HANDLERS = {
     "status": cmd_status,
     "sync": lambda args: args.func(args),
+    "backup": lambda args: args.func(args),
+    "restore": lambda args: args.func(args),
 }
 
 

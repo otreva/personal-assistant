@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, MutableMapping
 import json
 import os
+from datetime import datetime, timezone
 
 STATE_DIR_NAME = ".graphiti_sync"
 TOKENS_FILE = "tokens.json"
@@ -67,6 +68,41 @@ class GraphitiStateStore:
         merged = _deep_merge(current, update)
         self.save_state(merged)
         return merged
+
+    def record_error(self, source: str, message: str | None = None) -> Dict[str, Any]:
+        if not source:
+            raise ValueError("source must be provided")
+        state = self.load_state()
+        source_state = state.get(source) if isinstance(state.get(source), Mapping) else {}
+        try:
+            current_count = int(source_state.get("error_count", 0))
+        except (TypeError, ValueError):
+            current_count = 0
+        payload: Dict[str, Any] = {
+            source: {
+                "error_count": current_count + 1,
+                "last_error_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+        if message:
+            payload[source]["last_error_message"] = message
+        return self.update_state(payload)
+
+    def clear_errors(self, source: str) -> Dict[str, Any]:
+        if not source:
+            raise ValueError("source must be provided")
+        state = self.load_state()
+        current = state.get(source)
+        if not isinstance(current, Mapping):
+            return state
+        cleaned = dict(current)
+        cleaned.pop("error_count", None)
+        cleaned.pop("last_error_at", None)
+        cleaned.pop("last_error_message", None)
+        new_state = dict(state)
+        new_state[source] = cleaned
+        self.save_state(new_state)
+        return new_state
 
     def _write_json(self, path: Path, data: Mapping[str, Any]) -> None:
         tmp_path = path.with_suffix(".tmp")
