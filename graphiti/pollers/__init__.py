@@ -1,8 +1,9 @@
-"""Poller implementations for Gmail, Drive, and Calendar."""
+"""Poller implementations for data sources."""
 
 from .calendar import CalendarPoller, CalendarSyncTokenExpired
 from .drive import DrivePoller
 from .gmail import GmailPoller, GmailHistoryNotFound
+from .slack import SlackPoller, SlackRateLimited
 
 __all__ = [
     "CalendarPoller",
@@ -10,4 +11,6 @@ __all__ = [
     "DrivePoller",
     "GmailPoller",
     "GmailHistoryNotFound",
+    "SlackPoller",
+    "SlackRateLimited",
 ]

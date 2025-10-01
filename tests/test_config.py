@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import os
 
 import pytest
 
@@ -29,3 +30,15 @@ def test_defaults_when_missing(tmp_path: Path) -> None:
     config = load_config(dotenv_path=tmp_path / ".env", environ={})
     assert isinstance(config, GraphitiConfig)
     assert config.group_id == "mike_assistant"
+    assert config.slack_channel_allowlist == ()
+    assert config.calendar_ids == ("primary",)
+
+
+def test_parse_csv_overrides(tmp_path: Path) -> None:
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "SLACK_CHANNEL_ALLOWLIST=C1,C2, C2 ,C3\nCALENDAR_IDS=primary,team\n"
+    )
+    config = load_config(dotenv_path=dotenv, environ={})
+    assert config.slack_channel_allowlist == ("C1", "C2", "C3")
+    assert config.calendar_ids == ("primary", "team")
