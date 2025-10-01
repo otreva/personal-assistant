@@ -1,44 +1,65 @@
-import os
 from pathlib import Path
-import os
 
 import pytest
 
-from graphiti.config import GraphitiConfig, load_config
+from graphiti.config import ConfigStore, GraphitiConfig, load_config
 
 
-def test_load_config_prefers_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    dotenv = tmp_path / ".env"
-    dotenv.write_text("NEO4J_URI=bolt://dotenv:7687\nPOLL_GMAIL_DRIVE_CAL=100\n")
+@pytest.fixture()
+def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "config.json"
+    monkeypatch.setenv("GRAPHITI_CONFIG_PATH", str(path))
+    return path
+
+
+def test_load_config_creates_default_store(config_path: Path) -> None:
+    config = load_config()
+    assert config_path.exists()
+    assert config.group_id == "mike_assistant"
+    data = config_path.read_text()
+    assert "neo4j_uri" in data
+
+
+def test_environment_overrides_store(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ConfigStore(config_path)
+    store.save(GraphitiConfig(neo4j_uri="bolt://store:7687"))
 
     monkeypatch.setenv("NEO4J_URI", "bolt://env:7687")
-    monkeypatch.setenv("POLL_GMAIL_DRIVE_CAL", "200")
+    monkeypatch.setenv("POLL_GMAIL_DRIVE_CAL", "120")
 
-    config = load_config(dotenv_path=dotenv, environ=os.environ)
+    config = load_config()
     assert config.neo4j_uri == "bolt://env:7687"
-    assert config.poll_gmail_drive_calendar_seconds == 200
+    assert config.poll_gmail_drive_calendar_seconds == 120
 
 
-def test_invalid_integer_raises(tmp_path: Path) -> None:
-    dotenv = tmp_path / ".env"
-    dotenv.write_text("POLL_SLACK_ACTIVE=not-an-int\n")
+def test_invalid_numeric_input_raises(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("POLL_SLACK_ACTIVE", "not-an-int")
     with pytest.raises(ValueError):
-        load_config(dotenv_path=dotenv, environ={})
+        load_config()
 
 
-def test_defaults_when_missing(tmp_path: Path) -> None:
-    config = load_config(dotenv_path=tmp_path / ".env", environ={})
-    assert isinstance(config, GraphitiConfig)
-    assert config.group_id == "mike_assistant"
-    assert config.slack_channel_allowlist == ()
-    assert config.calendar_ids == ("primary",)
-
-
-def test_parse_csv_overrides(tmp_path: Path) -> None:
-    dotenv = tmp_path / ".env"
-    dotenv.write_text(
-        "SLACK_CHANNEL_ALLOWLIST=C1,C2, C2 ,C3\nCALENDAR_IDS=primary,team\n"
+def test_config_store_round_trip(config_path: Path) -> None:
+    store = ConfigStore(config_path)
+    original = GraphitiConfig(
+        slack_channel_allowlist=("C1", "C2"),
+        calendar_ids=("primary", "team"),
+        summarization_threshold=2000,
+        redaction_rules=(
+            ("secret@example.com", "[MASKED]"),
+            ("(?i)password", "***"),
+        ),
     )
-    config = load_config(dotenv_path=dotenv, environ={})
-    assert config.slack_channel_allowlist == ("C1", "C2", "C3")
-    assert config.calendar_ids == ("primary", "team")
+    store.save(original)
+
+    loaded = store.load()
+    assert loaded.slack_channel_allowlist == ("C1", "C2")
+    assert loaded.calendar_ids == ("primary", "team")
+    assert loaded.summarization_threshold == 2000
+    assert loaded.redaction_rules == (
+        ("secret@example.com", "[MASKED]"),
+        ("(?i)password", "***"),
+    )
